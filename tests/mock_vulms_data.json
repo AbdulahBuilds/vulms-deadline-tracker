@@ -1,0 +1,9 @@
+{
+  "student_id": "bc210401234",
+  "html_samples": {
+    "standard_table": "<table id='toDoList' class='todo-calendar'><thead><tr><th>Course</th><th>Activity Title</th><th>Type</th><th>Due Date</th><th>Link</th></tr></thead><tbody><tr><td>CS101 - Introduction to Computing</td><td>Assignment No. 1</td><td>Assignment</td><td>09-Nov-2026 23:59</td><td><a href='https://vulms.vu.edu.pk/Assignment/View.aspx?id=10552'>Submit</a></td></tr><tr><td>MTH101 - Calculus and Analytical Geometry</td><td>Quiz 1 (Lessons 1-10)</td><td>Quiz</td><td>12-Nov-2026</td><td><a href='https://vulms.vu.edu.pk/Quiz/Start.aspx?id=8831'>Start Quiz</a></td></tr><tr><td>ENG101 - English Comprehension</td><td>Graded Discussion Board 1</td><td>GDB</td><td>15-Nov-2026</td><td><a href='https://vulms.vu.edu.pk/GDB/View.aspx?id=9921'>Post Answer</a></td></tr></tbody></table>",
+    "card_layout": "<div class='todo-container'><div class='todo-item'><h4>CS201 - Introduction to Programming</h4><span class='title'>Assignment 2 (Pointers & Arrays)</span><p>Deadline: 20-Nov-2026 23:59</p><a href='https://vulms.vu.edu.pk/Assignment/View.aspx?id=10992'>View Assignment</a></div></div>",
+    "extended_table": "<table id='toDoList'><thead><tr><th>Course</th><th>Activity Title</th><th>Type</th><th>Due Date</th></tr></thead><tbody><tr><td>CS101 - Introduction to Computing</td><td>Assignment No. 1</td><td>Assignment</td><td>10-Nov-2026 23:59</td></tr></tbody></table>",
+    "past_due_table": "<table id='toDoList'><thead><tr><th>Course</th><th>Activity Title</th><th>Type</th><th>Due Date</th></tr></thead><tbody><tr><td>CS101 - Introduction to Computing</td><td>Old Past Assignment</td><td>Assignment</td><td>01-Jan-2024</td></tr></tbody></table>"
+  }
+}
