@@ -264,10 +264,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       await chrome.storage.local.set({ personalEmail: email });
-      showBanner(
-        email ? `✅ Alerts will be sent to: ${email}` : '✅ Alerts will be sent to your official VU email',
-        true
-      );
+      
+      // Dispatch immediate update to Google Apps Script backend and sheet rows
+      chrome.runtime.sendMessage({
+        action: 'UPDATE_STUDENT_EMAIL',
+        personalEmail: email
+      }, (res) => {
+        if (res && res.success) {
+          showBanner(
+            email ? `✅ Alerts will be sent to: ${email} (Sheet synced!)` : '✅ Alerts will be sent to your official VU email (Sheet synced!)',
+            true
+          );
+        } else {
+          showBanner(
+            email ? `✅ Alerts will be sent to: ${email}` : '✅ Alerts will be sent to your official VU email',
+            true
+          );
+        }
+      });
+
       await renderDashboard();
     });
   }

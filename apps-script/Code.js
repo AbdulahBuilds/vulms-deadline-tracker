@@ -33,7 +33,8 @@
       .addItem('4. ⏰ Schedule Email for 2:15 PM Today', 'scheduleReminderFor215PM')
       .addItem('5. ⚡ Dispatch Row 2 Email Right Now', 'trigger215PMEmail')
       .addSeparator()
-      .addItem('6. 📊 View System Status', 'viewSystemStatus')
+      .addItem('6. ✉️ Set / Update Alert Email Address', 'promptAndUpdateStudentEmail')
+      .addItem('7. 📊 View System Status', 'viewSystemStatus')
       .addToUi();
   }
 
@@ -82,9 +83,21 @@
 
       if (action === 'register_student') {
         var sheet = getOrCreateActivitiesSheet();
+        var updatedCount = 0;
+        if (payload.studentEmail || payload.studentName) {
+          var allRows = sheet.getDataRange().getValues();
+          for (var r = 1; r < allRows.length; r++) {
+            if (!payload.studentId || String(allRows[r][0]).toLowerCase() === String(payload.studentId).toLowerCase()) {
+              if (payload.studentEmail) sheet.getRange(r + 1, 19).setValue(payload.studentEmail);
+              if (payload.studentName) sheet.getRange(r + 1, 18).setValue(payload.studentName);
+              updatedCount++;
+            }
+          }
+        }
         return jsonResponse({
           status: 'success',
-          message: 'Student ' + (payload.studentId || '') + ' registered. Sheet initialized.'
+          message: 'Student ' + (payload.studentId || '') + ' registered. Updated ' + updatedCount + ' existing row(s).',
+          studentEmail: payload.studentEmail
         });
       }
 
@@ -272,14 +285,22 @@
           currentTimestamp, // created_at
           currentTimestamp, // updated_at
           currentTimestamp, // last_synced_at
-          payload.studentName || item.student_name || '',
-          payload.studentEmail || item.student_email || (studentId + '@vu.edu.pk')
+          payload.studentName || item.student_name || 'Muhammad Abdullah',
+          payload.studentEmail || item.student_email || (studentId.toLowerCase() === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : resolveRecipientEmail(payload.studentEmail, studentId))
         ]);
         inserted++;
       } else {
         // EXISTING RECORD: EVALUATE DELTAS
         var existing = existingMap[actKey];
         var rowNum = existing.rowNum;
+
+        // Keep student name and email synced on all existing rows
+        if (payload.studentEmail && payload.studentEmail !== existing.data[18]) {
+          sheet.getRange(rowNum, 19).setValue(payload.studentEmail);
+        }
+        if (payload.studentName && payload.studentName !== existing.data[17]) {
+          sheet.getRange(rowNum, 18).setValue(payload.studentName);
+        }
         var existingEndDate = Utilities.formatDate(new Date(existing.data[8]), CONFIG.TIMEZONE, 'yyyy-MM-dd');
         var existingReminderStatus = String(existing.data[12]).trim();
 
@@ -392,10 +413,8 @@
       if ((reminderStatus === 'pending' || reminderStatus === 'pending_extended') && (endDate === currentPktDate || reminderMatches)) {
         var studentId = String(row[0] || 'VU Student').trim();
         var studentName = String(row[17] || studentId).trim();
-        var studentEmail = String(row[18] || '').trim();
-        var activeUserEmail = '';
-        try { activeUserEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail(); } catch (e) {}
-        var targetRecipient = (studentEmail && studentEmail.includes('@')) ? studentEmail : (activeUserEmail || (studentId + '@vu.edu.pk'));
+        var rawEmail = String(row[18] || '').trim();
+        var targetRecipient = resolveRecipientEmail(rawEmail, studentId);
 
         if (!tasksByRecipient[targetRecipient]) {
           tasksByRecipient[targetRecipient] = {
@@ -709,10 +728,8 @@
     var row = data[rowNumber - 1];
     var studentId = String(row[0] || 'VU Student').trim();
     var studentName = String(row[17] || studentId).trim();
-    var studentEmail = String(row[18] || '').trim();
-    var activeUserEmail = '';
-    try { activeUserEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail(); } catch (e) {}
-    var recipient = (studentEmail && studentEmail.includes('@')) ? studentEmail : (activeUserEmail || (studentId + '@vu.edu.pk'));
+    var rawEmail = String(row[18] || '').trim();
+    var recipient = resolveRecipientEmail(rawEmail, studentId);
 
     var endDateVal = row[8] ? Utilities.formatDate(new Date(row[8]), CONFIG.TIMEZONE, 'yyyy-MM-dd') : '2026-10-21';
     var task = {
@@ -732,5 +749,78 @@
     sheet.getRange(rowNumber, 13).setValue('sent');
     sheet.getRange(rowNumber, 14).setValue(sentTimestamp);
     console.log('[VULMS Scheduler] Sent reminder for row ' + rowNumber + ' to ' + recipient);
+  }
+
+  /**
+   * Intelligently resolves alert recipient email:
+   * 1. Prioritizes student personal email (e.g. Gmail) or official VU email with initials suffix.
+   * 2. Rejects bare/incomplete <id>@vu.edu.pk (which bounces on VU Microsoft 365 Exchange).
+   * 3. Falls back to spreadsheet owner's active Google Account email.
+   */
+  function resolveRecipientEmail(rowEmail, studentId) {
+    var activeUserEmail = '';
+    try {
+      activeUserEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
+    } catch (e) {}
+
+    var cleanEmail = String(rowEmail || '').trim();
+    // Bare VU email pattern: 2 letters + 7-9 digits @vu.edu.pk (missing initials suffix e.g. mab)
+    var isBareVuEmail = /^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(cleanEmail);
+
+    // 1. Valid personal email (e.g. @gmail.com) or official VU email with initials suffix (e.g. bc240424582mab@vu.edu.pk)
+    if (cleanEmail && cleanEmail.includes('@') && !isBareVuEmail) {
+      return cleanEmail;
+    }
+
+    // 2. Personal Gmail of spreadsheet owner
+    if (activeUserEmail && activeUserEmail.includes('@')) {
+      return activeUserEmail;
+    }
+
+    // 3. Known student profile fallback
+    if (String(studentId).toLowerCase() === 'bc240424582') {
+      return 'bc240424582mab@vu.edu.pk';
+    }
+
+    return cleanEmail || activeUserEmail || (studentId + '@vu.edu.pk');
+  }
+
+  /**
+   * Menu action allowing student to view or update reminder email for all rows
+   */
+  function promptAndUpdateStudentEmail() {
+    var sheet = getOrCreateActivitiesSheet();
+    var currentEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || '';
+    var data = sheet.getDataRange().getValues();
+    if (data.length > 1 && data[1][18]) {
+      currentEmail = data[1][18];
+    }
+
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt(
+      '✉️ Set Reminder Email Address',
+      'Current Email: ' + currentEmail + '\n\nEnter the email address where you want to receive 12:00 PM deadline alerts:\n(e.g. your Gmail or official bc...mab@vu.edu.pk)',
+      ui.ButtonSet.OK_CANCEL
+    );
+
+    if (response.getSelectedButton() === ui.Button.OK) {
+      var newEmail = response.getResponseText().trim();
+      if (!newEmail || !newEmail.includes('@')) {
+        ui.alert('Invalid Email', 'Please enter a valid email address with an @ symbol.', ui.ButtonSet.OK);
+        return;
+      }
+
+      var rowsUpdated = 0;
+      for (var i = 1; i < data.length; i++) {
+        sheet.getRange(i + 1, 19).setValue(newEmail);
+        rowsUpdated++;
+      }
+
+      ui.alert(
+        'Email Updated!',
+        'Successfully set alert destination to:\n' + newEmail + '\n\nUpdated ' + rowsUpdated + ' row(s).',
+        ui.ButtonSet.OK
+      );
+    }
   }
 

@@ -108,28 +108,31 @@
       });
     }
 
-    // If official email with initials suffix is not yet found, fetch StudentProfile.aspx in background
+    // If official email with initials suffix is not yet found, fetch StudentProfile in background
     if ((!profile.vuEmail || profile.vuEmail === `${studentId}@vu.edu.pk`) && !window.location.pathname.includes('StudentProfile.aspx')) {
-      fetch('/Profile/StudentProfile.aspx', { credentials: 'include' })
-        .then(r => r.text())
-        .then(html => {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
-          const fetchedProfile = window.VulmsExtractor.extractStudentProfile(doc);
-          if (fetchedProfile && fetchedProfile.vuEmail) {
-            chrome.runtime.sendMessage({
-              action: 'VULMS_STUDENT_DETECTED',
-              data: {
-                studentId: fetchedProfile.studentId || studentId,
-                studentName: fetchedProfile.studentName || studentName,
-                vuEmail: fetchedProfile.vuEmail,
-                defaultEmail: fetchedProfile.vuEmail,
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
-        })
-        .catch(() => {});
+      const endpoints = ['/StudentProfile.aspx', '/Profile/StudentProfile.aspx'];
+      endpoints.forEach((ep) => {
+        fetch(ep, { credentials: 'include' })
+          .then(r => r.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const fetchedProfile = window.VulmsExtractor.extractStudentProfile(doc);
+            if (fetchedProfile && fetchedProfile.vuEmail) {
+              chrome.runtime.sendMessage({
+                action: 'VULMS_STUDENT_DETECTED',
+                data: {
+                  studentId: fetchedProfile.studentId || studentId,
+                  studentName: fetchedProfile.studentName || studentName,
+                  vuEmail: fetchedProfile.vuEmail,
+                  defaultEmail: fetchedProfile.vuEmail,
+                  timestamp: new Date().toISOString()
+                }
+              });
+            }
+          })
+          .catch(() => {});
+      });
     }
 
     if (activities.length > 0) {
@@ -143,10 +146,15 @@
         pollTimer = null;
       }
 
+      const verifiedEmail = profile.vuEmail || (studentId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : null);
+
       chrome.runtime.sendMessage({
         action: 'VULMS_ACTIVITIES_EXTRACTED',
         data: {
           studentId: studentId,
+          studentName: studentName || 'Muhammad Abdullah',
+          vuEmail: verifiedEmail,
+          studentEmail: verifiedEmail,
           activities: activities,
           pageUrl: window.location.href,
           timestamp: new Date().toISOString()

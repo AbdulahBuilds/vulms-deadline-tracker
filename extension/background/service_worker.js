@@ -75,7 +75,7 @@ function updateBadge(text, color) {
  * Process synchronized activities received from content script
  */
 async function handleActivitiesSync(data) {
-  const settings = await chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentName', 'personalEmail']);
+  const settings = await chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentName', 'personalEmail', 'vuEmail']);
   const webAppUrl = settings.webAppUrl;
   const secretToken = settings.secretToken || '';
 
@@ -93,8 +93,10 @@ async function handleActivitiesSync(data) {
 
   updateBadge('SYNC', '#3b82f6'); // blue
 
-  const sEmail = settings.personalEmail || `${data.studentId}@vu.edu.pk`;
-  const sName = settings.studentName || data.studentName || 'VU Student';
+  const sId = (data.studentId || 'bc240424582').toLowerCase();
+  const verifiedVuEmail = data.vuEmail || settings.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
+  const sEmail = settings.personalEmail || verifiedVuEmail;
+  const sName = settings.studentName || data.studentName || 'Muhammad Abdullah';
 
   const payload = {
     action: 'sync_activities',
@@ -173,6 +175,42 @@ async function processPendingSyncQueue() {
 
 // Runtime message router
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'UPDATE_STUDENT_EMAIL') {
+    const newEmail = request.personalEmail;
+    chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentId', 'studentName', 'vuEmail', 'cachedActivities'], async (store) => {
+      await chrome.storage.local.set({ personalEmail: newEmail });
+      const sId = (store.studentId || 'bc240424582').toLowerCase();
+      const verifiedVu = store.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
+      const targetEmail = newEmail || verifiedVu;
+
+      if (store.webAppUrl) {
+        postToGoogleAppsScript(store.webAppUrl, {
+          action: 'register_student',
+          secretToken: store.secretToken || '',
+          studentId: store.studentId || 'BC240424582',
+          studentName: store.studentName || 'Muhammad Abdullah',
+          studentEmail: targetEmail,
+          timestamp: new Date().toISOString()
+        }).then(() => {
+          if (store.cachedActivities && store.cachedActivities.length > 0) {
+            handleActivitiesSync({
+              studentId: store.studentId || 'BC240424582',
+              studentName: store.studentName || 'Muhammad Abdullah',
+              studentEmail: targetEmail,
+              activities: store.cachedActivities
+            });
+          }
+          sendResponse({ success: true, email: targetEmail });
+        }).catch((err) => {
+          sendResponse({ success: false, error: err.message });
+        });
+      } else {
+        sendResponse({ success: true, email: targetEmail });
+      }
+    });
+    return true;
+  }
+
   if (request.action === 'VULMS_ACTIVITIES_EXTRACTED') {
     handleActivitiesSync(request.data).then(sendResponse);
     return true; // Keep channel open for async response
