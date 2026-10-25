@@ -295,16 +295,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnManualSync.disabled = true;
 
       chrome.runtime.sendMessage({ action: 'TRIGGER_RESYNC_ACTIVE_TAB' }, (res) => {
-        setTimeout(() => {
-          if (icon) icon.classList.remove('spinning');
-          btnManualSync.disabled = false;
-          if (res && res.success) {
-            showBanner('✅ LMS sync completed!', true);
-          } else {
-            showBanner(res ? res.message : 'Please open or refresh your VULMS tab.', true);
-          }
-          renderDashboard();
-        }, 1000);
+        if (icon) icon.classList.remove('spinning');
+        btnManualSync.disabled = false;
+        if (res && res.success) {
+          showBanner(res.message || '✅ LMS sync completed!', true);
+        } else {
+          showBanner((res && res.message) ? res.message : 'Please open or refresh your VULMS tab.', false);
+        }
+        renderDashboard();
       });
     });
   }
@@ -398,4 +396,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.tabs.create({ url: 'https://docs.google.com/spreadsheets/u/0/' });
     });
   }
+
+  // Auto-refresh popup if background sync updates storage
+  chrome.storage.onChanged.addListener(() => {
+    renderDashboard();
+  });
 });

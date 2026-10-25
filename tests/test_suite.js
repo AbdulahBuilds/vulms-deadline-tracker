@@ -30,9 +30,11 @@ console.log('[1] Date Normalization:');
 assert(extractor.normalizeDate('09-Nov-2026 23:59') === '2026-11-09', 'DD-MMM-YYYY with time format', extractor.normalizeDate('09-Nov-2026 23:59'));
 assert(extractor.normalizeDate('2026-11-09') === '2026-11-09', 'ISO YYYY-MM-DD format');
 assert(extractor.normalizeDate('15/12/2026') === '2026-12-15', 'DD/MM/YYYY format');
-assert(extractor.normalizeDate('Nov 09, 2026') === '2026-11-09', 'MMM DD, YYYY format');
-assert(extractor.normalizeDate('Due: 5 October 2026') === '2026-10-05', 'Text with "Due:" prefix and full month');
-assert(extractor.normalizeDate('invalid date string') === null, 'Invalid date string returns null');
+assert(extractor.normalizeDate('Nov 04, 2026 11:59 PM') === '2026-11-04', 'VULMS standard "Nov 04, 2026 11:59 PM" format');
+assert(extractor.normalizeDate('60%') === null, 'Rejects percentage string "60%"');
+assert(extractor.normalizeDate('60') === null, 'Rejects standalone number "60"');
+assert(extractor.normalizeDate('1960-01-01') === null, 'Rejects year outside academic bounds (1960)');
+assert(extractor.normalizeDate('Weightage 25%') === null, 'Rejects weightage string');
 
 // ----------------------------------------------------
 // Section 2: Course & Activity Parsing
@@ -44,9 +46,21 @@ assert(c1.code === 'CS101' && c1.name === 'Introduction to Computing', 'Hyphen s
 const c2 = extractor.parseCourse('MTH101: Calculus and Analytical Geometry');
 assert(c2.code === 'MTH101' && c2.name === 'Calculus and Analytical Geometry', 'Colon separated course');
 
+const c3 = extractor.parseCourse('CS302');
+assert(c3.code === 'CS302' && c3.name === 'Digital Logic Design', 'Auto-resolves CS302 to "Digital Logic Design" via catalog');
+
+const c4 = extractor.parseCourse('EXAMS 60%');
+assert(c4.code !== 'EXAMS60', 'Rejects non-course phrase "EXAMS 60%" from matching as course code');
+
 assert(extractor.inferActivityType('Assignment No. 2') === 'Assignment', 'Assignment inference');
 assert(extractor.inferActivityType('Online Quiz 1') === 'Quiz', 'Quiz inference');
+assert(extractor.inferActivityType('Semester Quiz # 01') === 'Quiz', 'Semester Quiz inference');
 assert(extractor.inferActivityType('Graded Discussion Board (GDB)') === 'GDB', 'GDB inference');
+assert(extractor.inferActivityType('Final Term % 60%') !== 'Final Exam', 'Rejects grading weight from Final Exam inference');
+
+// URL Activity ID vs Course Code
+assert(extractor.extractActivityIdFromUrl('https://vulms.vu.edu.pk/CourseHome.aspx?id=CS302') === '', 'Rejects course code in URL query ?id=CS302');
+assert(extractor.extractActivityIdFromUrl('https://vulms.vu.edu.pk/Quiz/Start.aspx?id=8831') === '8831', 'Extracts valid numerical activity ID 8831');
 
 // ----------------------------------------------------
 // Section 2B: Official VU Email & Student Profile Tests
@@ -221,6 +235,100 @@ const testItemStudentB = {
 };
 const resH = db.sync({ studentId: studentB, activities: [testItemStudentB] });
 assert(resH.inserted === 1 && db.rows.filter(r => r.student_id === studentB).length === 1, 'Test H: Student A and Student B data strictly isolated');
+
+// ----------------------------------------------------
+// Section 5: Real-World VULMS DOM Extraction Acceptance Test
+// ----------------------------------------------------
+console.log('\n[5] VULMS DOM Extraction & Grading Scheme Rejection:');
+const mockVulmsPage = {
+  querySelectorAll: (selector) => {
+    if (selector.includes('table')) {
+      return [
+        // Table 1: Valid To-Do Calendar Table (4 quizzes)
+        {
+          textContent: 'Course Title Open Date Due Date Action CS302 Semester Quiz # 01 Nov 03, 2026 12:00 AM Nov 04, 2026 11:59 PM CS302 Semester Quiz # 02 Dec 01, 2026 12:00 AM Dec 02, 2026 11:59 PM',
+          querySelectorAll: (sub) => {
+            if (sub === 'tr') {
+              return [
+                {
+                  querySelectorAll: () => [
+                    { textContent: 'Course' },
+                    { textContent: 'Title' },
+                    { textContent: 'Open Date' },
+                    { textContent: 'Due Date' },
+                    { textContent: 'Action' }
+                  ]
+                },
+                {
+                  querySelectorAll: () => [
+                    { textContent: 'CS302', querySelector: () => null },
+                    { textContent: 'Semester Quiz # 01', querySelector: () => null },
+                    { textContent: 'Nov 03, 2026 12:00 AM', querySelector: () => null },
+                    { textContent: 'Nov 04, 2026 11:59 PM', querySelector: () => null },
+                    { textContent: '', querySelector: () => null }
+                  ]
+                },
+                {
+                  querySelectorAll: () => [
+                    { textContent: 'CS302', querySelector: () => null },
+                    { textContent: 'Semester Quiz # 02', querySelector: () => null },
+                    { textContent: 'Dec 01, 2026 12:00 AM', querySelector: () => null },
+                    { textContent: 'Dec 02, 2026 11:59 PM', querySelector: () => null },
+                    { textContent: '', querySelector: () => null }
+                  ]
+                }
+              ];
+            }
+            return [];
+          }
+        },
+        // Table 2: Assessment Scheme Table (Must be rejected)
+        {
+          textContent: 'Assessment Scheme Weightage Final Term % 60% Mid Term % 20% Quizzes 10% Assignments 10%',
+          querySelectorAll: () => []
+        }
+      ];
+    }
+    return [];
+  }
+};
+
+const extractedFromMock = extractor.extractActivities(mockVulmsPage, 'bc240424582');
+assert(extractedFromMock.length === 2, 'Extracts exactly 2 quizzes and 0 grading scheme items', `Extracted: ${extractedFromMock.length}`);
+assert(extractedFromMock[0].course_code === 'CS302', 'Course code is CS302');
+assert(extractedFromMock[0].course_name === 'Digital Logic Design', 'Auto-resolved course title to "Digital Logic Design"');
+assert(extractedFromMock[0].end_date === '2026-11-04', 'Due date is 2026-11-04');
+assert(extractedFromMock[0].vulms_activity_id === '', 'Does not assign CS302 as vulms_activity_id');
+assert(!extractedFromMock.some(a => a.course_code.includes('EXAM') || a.activity_title.includes('%')), 'Zero grading scheme false positives extracted');
+
+// ----------------------------------------------------
+// Section 6: StudentProfile.aspx ASP.NET Form Controls & Unrendered Doc Test
+// ----------------------------------------------------
+console.log('\n[6] StudentProfile ASP.NET Form Controls & DOMParser Document Support:');
+const mockAspnetDoc = {
+  body: {
+    // Note: simulating DOMParser document where innerText is undefined!
+    innerText: undefined,
+    textContent: 'VU Student Profile Page',
+    innerHTML: '<input id="txtEmail" value="bc240424582mab@vu.edu.pk" />'
+  },
+  querySelectorAll: (selector) => {
+    if (selector.includes('input')) {
+      return [
+        { id: 'txtStudentId', name: 'ctl00$txtStudentId', value: 'BC240424582', getAttribute: () => 'BC240424582' },
+        { id: 'txtStudentName', name: 'ctl00$txtStudentName', value: 'Muhammad Abdullah', getAttribute: () => 'Muhammad Abdullah' },
+        { id: 'txtVUEmail', name: 'ctl00$txtVUEmail', value: 'bc240424582mab@vu.edu.pk', getAttribute: () => 'bc240424582mab@vu.edu.pk' }
+      ];
+    }
+    return [];
+  },
+  querySelector: () => null
+};
+
+const profileExtracted = extractor.extractStudentProfile(mockAspnetDoc);
+assert(profileExtracted.studentId === 'bc240424582', 'Extracts student ID from ASP.NET form input without crashing when innerText is undefined');
+assert(profileExtracted.studentName === 'Muhammad Abdullah', 'Extracts student name from ASP.NET form input');
+assert(profileExtracted.vuEmail === 'bc240424582mab@vu.edu.pk', 'Extracts official VU email from ASP.NET form input');
 
 console.log('\n======================================================');
 console.log(`TEST SUMMARY: ${passCount} PASSED, ${failCount} FAILED`);

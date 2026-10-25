@@ -173,6 +173,41 @@ async function processPendingSyncQueue() {
   }
 }
 
+// Setup DeclarativeNetRequest rules to remove X-Frame-Options and CSP for sub_frames of *.vu.edu.pk
+function setupFrameHeaderRules() {
+  if (chrome.declarativeNetRequest && chrome.declarativeNetRequest.updateDynamicRules) {
+    chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [1001],
+      addRules: [
+        {
+          id: 1001,
+          priority: 1,
+          action: {
+            type: 'modifyHeaders',
+            responseHeaders: [
+              { header: 'x-frame-options', operation: 'remove' },
+              { header: 'content-security-policy', operation: 'remove' }
+            ]
+          },
+          condition: {
+            urlFilter: '*://*.vu.edu.pk/*',
+            resourceTypes: ['sub_frame']
+          }
+        }
+      ]
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('[VULMS Background] DNR rule registration notice:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[VULMS Background] DeclarativeNetRequest sub_frame rules activated successfully.');
+      }
+    });
+  }
+}
+
+// Initialize rules immediately
+setupFrameHeaderRules();
+
 // Runtime message router
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'UPDATE_STUDENT_EMAIL') {
@@ -212,7 +247,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'VULMS_ACTIVITIES_EXTRACTED') {
-    handleActivitiesSync(request.data).then(sendResponse);
+    handleActivitiesSync(request.data).then((res) => {
+      // Broadcast toast notification to all open VULMS tabs (e.g. Home.aspx)
+      if (res && res.success && request.data.activities && request.data.activities.length > 0) {
+        chrome.tabs.query({ url: '*://*.vu.edu.pk/*' }, (tabs) => {
+          if (tabs && tabs.length > 0) {
+            for (const t of tabs) {
+              chrome.tabs.sendMessage(t.id, {
+                action: 'SHOW_SYNC_TOAST',
+                count: request.data.activities.length
+              }).catch(() => {});
+            }
+          }
+        });
+      }
+      sendResponse(res);
+    });
     return true; // Keep channel open for async response
   }
 
@@ -331,19 +381,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'TRIGGER_RESYNC_ACTIVE_TAB') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0] && tabs[0].id) {
-        chrome.tabs.sendMessage(tabs[0].id, { action: 'TRIGGER_MANUAL_SYNC' }, (res) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ success: false, message: 'Please navigate to a VULMS page first.' });
-          } else {
-            sendResponse({ success: true });
-          }
+    chrome.tabs.query({ url: '*://*.vu.edu.pk/*' }, (vulmsTabs) => {
+      if (vulmsTabs && vulmsTabs.length > 0) {
+        chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+          const targetTab = (activeTabs[0] && activeTabs[0].url && activeTabs[0].url.includes('vu.edu.pk'))
+            ? activeTabs[0]
+            : vulmsTabs[0];
+
+          chrome.tabs.sendMessage(targetTab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (tabRes) => {
+            if (chrome.runtime.lastError || !tabRes) {
+              // If tab communication timed out, resync from local storage cache
+              syncFromStorageCache(sendResponse);
+            } else {
+              sendResponse(tabRes);
+            }
+          });
         });
       } else {
-        sendResponse({ success: false, message: 'No active tab found.' });
+        // No VULMS tab open right now, sync existing cached activities directly to Google Sheets!
+        syncFromStorageCache(sendResponse);
       }
     });
     return true;
   }
 });
+
+/**
+ * Helper to resync cached activities directly to Google Apps Script
+ */
+function syncFromStorageCache(sendResponse) {
+  chrome.storage.local.get(['cachedActivities', 'studentId', 'studentName', 'personalEmail', 'vuEmail', 'webAppUrl'], async (store) => {
+    if (store.cachedActivities && store.cachedActivities.length > 0 && store.webAppUrl) {
+      try {
+        const res = await handleActivitiesSync({
+          studentId: store.studentId || 'BC240424582',
+          studentName: store.studentName || 'Muhammad Abdullah',
+          vuEmail: store.vuEmail,
+          personalEmail: store.personalEmail,
+          activities: store.cachedActivities
+        });
+        sendResponse({
+          success: true,
+          message: `✅ Synced ${store.cachedActivities.length} activities to Google Sheets!`
+        });
+      } catch (err) {
+        sendResponse({ success: false, message: 'Sync failed: ' + err.message });
+      }
+    } else {
+      sendResponse({
+        success: false,
+        message: 'Please open VULMS in a tab to capture activities.'
+      });
+    }
+  });
+}

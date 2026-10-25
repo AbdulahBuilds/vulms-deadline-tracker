@@ -256,6 +256,11 @@
       var startDate = item.start_date || endDate;
       var reminderTargetTime = endDate + ' 12:00:00';
 
+      // Sanity Guard: Ignore legacy false positives (e.g. percentages "60%", year 1960)
+      if (!endDate || endDate < '2024-01-01' || /^\s*\d{1,3}\s*%\s*$/.test(item.activity_title || '')) {
+        continue;
+      }
+
       // Ingestion-Time Filtering: Late-Discovered Past Due Items (Section 8)
       var initialStatus = 'active';
       var initialReminderStatus = 'pending';

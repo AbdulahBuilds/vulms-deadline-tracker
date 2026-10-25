@@ -19,11 +19,13 @@
   },
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "cookies",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
-    "https://*.vu.edu.pk/*",
-    "https://vulms.vu.edu.pk/*",
+    "*://*.vu.edu.pk/*",
+    "*://vulms.vu.edu.pk/*",
     "https://script.google.com/*",
     "https://script.googleusercontent.com/*"
   ],
@@ -33,9 +35,10 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.vu.edu.pk/*",
-        "https://vulms.vu.edu.pk/*"
+        "*://*.vu.edu.pk/*",
+        "*://vulms.vu.edu.pk/*"
       ],
+      "all_frames": false,
       "js": [
         "content/extractor.js",
         "content/content.js"

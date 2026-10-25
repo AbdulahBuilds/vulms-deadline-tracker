@@ -20,6 +20,59 @@
   };
 
   /**
+   * Virtual University Official Course Catalog Lookup
+   * Automatically provides full, friendly course titles when LMS only displays course codes (e.g. CS302).
+   */
+  const VU_COURSE_CATALOG = {
+    'CS101': 'Introduction to Computing',
+    'CS201': 'Introduction to Programming',
+    'CS201P': 'Introduction to Programming (Practical)',
+    'CS301': 'Data Structures',
+    'CS301P': 'Data Structures (Practical)',
+    'CS302': 'Digital Logic Design',
+    'CS302P': 'Digital Logic Design (Practical)',
+    'CS304': 'Object Oriented Programming',
+    'CS304P': 'Object Oriented Programming (Practical)',
+    'CS401': 'Computer Architecture and Assembly Language',
+    'CS402': 'Theory of Automata',
+    'CS403': 'Database Management Systems',
+    'CS403P': 'Database Management Systems (Practical)',
+    'CS408': 'Human Computer Interaction',
+    'CS411': 'Visual Programming',
+    'CS501': 'Advanced Computer Architecture',
+    'CS502': 'Fundamental of Algorithms',
+    'CS504': 'Software Engineering - I',
+    'CS506': 'Web Design and Development',
+    'CS508': 'Modern Programming Languages',
+    'CS601': 'Data Communication',
+    'CS602': 'Computer Graphics',
+    'CS604': 'Operating Systems',
+    'CS605': 'Software Engineering - II',
+    'CS609': 'System Programming',
+    'CS610': 'Computer Networks',
+    'CS614': 'Data Warehousing',
+    'CS615': 'Software Project Management',
+    'IT430': 'E-Commerce',
+    'MTH101': 'Calculus And Analytical Geometry',
+    'MTH202': 'Discrete Mathematics',
+    'MTH301': 'Calculus II',
+    'MTH302': 'Business Mathematics & Statistics',
+    'ENG101': 'English Comprehension',
+    'ENG201': 'Business and Technical English Writing',
+    'PHY101': 'Physics',
+    'PHY301': 'Circuit Theory',
+    'ISL202': 'Islamic Studies',
+    'ETH202': 'Ethics (for Non-Muslims)',
+    'PAK301': 'Pakistan Studies',
+    'MGT101': 'Financial Accounting',
+    'MGT211': 'Introduction to Business',
+    'MGT301': 'Principles of Marketing',
+    'MGT503': 'Principles of Management',
+    'STA301': 'Statistics and Probability',
+    'ECO401': 'Economics'
+  };
+
+  /**
    * Fast deterministic hash (FNV-1a 32-bit hex)
    */
   function hashString(str) {
@@ -50,18 +103,41 @@
   }
 
   /**
+   * Validates year bounds for active Virtual University academic deadlines (2024 to 2035)
+   */
+  function isValidAcademicYear(yearStr) {
+    const y = parseInt(yearStr, 10);
+    return !isNaN(y) && y >= 2024 && y <= 2035;
+  }
+
+  /**
    * Normalizes diverse date formats into strict ISO YYYY-MM-DD
    * Supports:
-   *  - "09-Nov-2026", "9-Nov-2026", "09 Nov 2026", "Nov 09, 2026"
+   *  - "09-Nov-2026", "9-Nov-2026", "09 Nov 2026", "Nov 09, 2026", "Nov 04, 2026 11:59 PM"
    *  - "2026-11-09", "09/11/2026", "09-11-2026"
-   *  - With trailing time: "09-Nov-2026 23:59:00"
+   * Strictly rejects:
+   *  - Percentages (e.g. "60%"), standalone numbers (e.g. "60", "100")
+   *  - Non-academic years (e.g. 1960)
+   *  - Non-date strings like "marks", "weightage", "scheme"
    */
   function normalizeDate(rawDateStr) {
     if (!rawDateStr || typeof rawDateStr !== 'string') return null;
 
+    // Immediately reject percentages, standalone numbers, or grading weight terms
+    if (rawDateStr.includes('%')) return null;
+    if (/^\s*\d{1,4}\s*$/.test(rawDateStr)) return null;
+
+    const lowerRaw = rawDateStr.toLowerCase();
+    const blacklistWords = ['marks', 'weight', 'total', 'scheme', 'policy', 'grade', 'points', 'gpa', 'final term %'];
+    for (const b of blacklistWords) {
+      if (lowerRaw.includes(b)) return null;
+    }
+
     let clean = rawDateStr.replace(/due\s*date\s*:?/i, '')
                           .replace(/due\s*:?/i, '')
                           .replace(/deadline\s*:?/i, '')
+                          .replace(/open\s*date\s*:?/i, '')
+                          .replace(/open\s*:?/i, '')
                           .trim();
 
     // Check ISO: YYYY-MM-DD
@@ -70,7 +146,10 @@
       const year = isoMatch[1];
       const month = isoMatch[2].padStart(2, '0');
       const day = isoMatch[3].padStart(2, '0');
-      return `${year}-${month}-${day}`;
+      if (isValidAcademicYear(year) && parseInt(month, 10) <= 12 && parseInt(day, 10) <= 31) {
+        return `${year}-${month}-${day}`;
+      }
+      return null;
     }
 
     // Check Day-MonName-Year: e.g. 09-Nov-2026, 9 Nov 2026, 9-November-2026
@@ -80,19 +159,19 @@
       const monStr = textMonMatch[2].toLowerCase();
       const month = MONTH_MAP[monStr] || MONTH_MAP[monStr.substring(0, 3)];
       const year = textMonMatch[3];
-      if (month) {
+      if (month && isValidAcademicYear(year) && parseInt(day, 10) <= 31) {
         return `${year}-${month}-${day}`;
       }
     }
 
-    // Check MonName Day, Year: e.g. Nov 09, 2026 or November 9 2026
+    // Check MonName Day, Year: e.g. Nov 04, 2026 or November 9 2026 (Standard VULMS To-Do format)
     const monFirstMatch = clean.match(/([A-Za-z]{3,9})[\s\-_/]+(\d{1,2})[\s\-_/,]+(\d{4})/);
     if (monFirstMatch) {
       const monStr = monFirstMatch[1].toLowerCase();
       const month = MONTH_MAP[monStr] || MONTH_MAP[monStr.substring(0, 3)];
       const day = monFirstMatch[2].padStart(2, '0');
       const year = monFirstMatch[3];
-      if (month) {
+      if (month && isValidAcademicYear(year) && parseInt(day, 10) <= 31) {
         return `${year}-${month}-${day}`;
       }
     }
@@ -103,16 +182,23 @@
       const day = ddmmyyyyMatch[1].padStart(2, '0');
       const month = ddmmyyyyMatch[2].padStart(2, '0');
       const year = ddmmyyyyMatch[3];
-      return `${year}-${month}-${day}`;
+      if (isValidAcademicYear(year) && parseInt(month, 10) <= 12 && parseInt(day, 10) <= 31) {
+        return `${year}-${month}-${day}`;
+      }
     }
 
-    // Fallback native Date parse
-    const parsed = new Date(clean);
-    if (!isNaN(parsed.getTime())) {
-      const y = parsed.getFullYear();
-      const m = String(parsed.getMonth() + 1).padStart(2, '0');
-      const d = String(parsed.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
+    // Fallback native Date parse - ONLY if it explicitly contains a 4-digit academic year
+    const yearMatch = clean.match(/\b(20\d{2})\b/);
+    if (yearMatch && isValidAcademicYear(yearMatch[1])) {
+      const parsed = new Date(clean);
+      if (!isNaN(parsed.getTime())) {
+        const y = parsed.getFullYear();
+        if (isValidAcademicYear(String(y))) {
+          const m = String(parsed.getMonth() + 1).padStart(2, '0');
+          const d = String(parsed.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+        }
+      }
     }
 
     return null;
@@ -124,6 +210,14 @@
   function inferActivityType(text) {
     if (!text) return 'Activity';
     const lower = text.toLowerCase();
+
+    // Ignore grading weight / syllabus percentages
+    if (lower.includes('%') || lower.includes('weight') || lower.includes('marks')) {
+      if (!lower.includes('assignment') && !lower.includes('quiz') && !lower.includes('gdb')) {
+        return 'Activity';
+      }
+    }
+
     if (lower.includes('assignment')) return 'Assignment';
     if (lower.includes('quiz')) return 'Quiz';
     if (lower.includes('gdb') || lower.includes('graded discussion')) return 'GDB';
@@ -131,36 +225,48 @@
     if (lower.includes('practical') || lower.includes('lab')) return 'Practical';
     if (lower.includes('project')) return 'Project';
     if (lower.includes('midterm') || lower.includes('mid term')) return 'Midterm Exam';
-    if (lower.includes('final') || lower.includes('final term')) return 'Final Exam';
+    if (lower.includes('final exam') || lower.includes('final term exam')) return 'Final Exam';
     return 'Activity';
   }
 
   /**
    * Parses course text into code and title
+   * e.g., "CS302" => { code: "CS302", name: "Digital Logic Design" }
    * e.g., "CS101 - Introduction to Computing" => { code: "CS101", name: "Introduction to Computing" }
    */
   function parseCourse(rawText) {
     if (!rawText) return { code: 'VU_COURSE', name: 'General Activity' };
     const clean = rawText.trim().replace(/\s+/g, ' ');
 
+    const BLACKLIST_COURSE_WORDS = [
+      'EXAMS', 'EXAM', 'TOTAL', 'MARKS', 'GRADE', 'WEIGHT', 'FINAL',
+      'MIDTERM', 'QUIZ', 'WEEK', 'LESSON', 'PAGE', 'SPRING', 'FALL',
+      'SEMESTER', 'COURSE', 'ASSIGNMENT'
+    ];
+
     // Match "CS101 - Title" or "CS101: Title" or "CS101 (Title)"
-    const match = clean.match(/^([A-Za-z]{2,5}\s*\d{2,4}[A-Za-z]?)\s*[\-:\(]\s*(.+?)\)?$/);
+    const match = clean.match(/^([A-Za-z]{2,4}\s*\d{3}[A-Za-z]?)\s*[\-:\(]\s*(.+?)\)?$/);
     if (match) {
-      return {
-        code: match[1].replace(/\s+/g, '').toUpperCase(),
-        name: match[2].trim()
-      };
+      const code = match[1].replace(/\s+/g, '').toUpperCase();
+      if (!BLACKLIST_COURSE_WORDS.includes(code)) {
+        return {
+          code: code,
+          name: match[2].trim() || VU_COURSE_CATALOG[code] || code
+        };
+      }
     }
 
-    // Check just course code: "CS101"
-    const codeOnlyMatch = clean.match(/\b([A-Za-z]{2,5}\s*\d{2,4}[A-Za-z]?)\b/);
+    // Check standard VU course code: 2-4 letters followed by 3 digits (e.g. "CS302", "CS101", "MTH101")
+    const codeOnlyMatch = clean.match(/\b([A-Za-z]{2,4}\s*\d{3}[A-Za-z]?)\b/);
     if (codeOnlyMatch) {
       const code = codeOnlyMatch[1].replace(/\s+/g, '').toUpperCase();
-      let name = clean.replace(codeOnlyMatch[0], '').replace(/^[\s\-:]+/, '').trim();
-      return {
-        code: code,
-        name: name || code
-      };
+      if (!BLACKLIST_COURSE_WORDS.includes(code)) {
+        let name = clean.replace(codeOnlyMatch[0], '').replace(/^[\s\-:]+/, '').trim();
+        return {
+          code: code,
+          name: name || VU_COURSE_CATALOG[code] || code
+        };
+      }
     }
 
     return {
@@ -171,17 +277,27 @@
 
   /**
    * Extract Activity ID from URLs if present
+   * Rejects course codes (e.g. ?id=CS302) to prevent composite key collision
    */
   function extractActivityIdFromUrl(url) {
     if (!url) return '';
     try {
       const parsed = new URL(url, 'https://vulms.vu.edu.pk');
-      return parsed.searchParams.get('id') ||
-             parsed.searchParams.get('activityId') ||
-             parsed.searchParams.get('AssignmentId') ||
-             parsed.searchParams.get('QuizId') ||
-             parsed.searchParams.get('GDBId') ||
-             '';
+      let id = parsed.searchParams.get('id') ||
+               parsed.searchParams.get('activityId') ||
+               parsed.searchParams.get('AssignmentId') ||
+               parsed.searchParams.get('QuizId') ||
+               parsed.searchParams.get('GDBId') ||
+               '';
+      id = String(id).trim();
+
+      // If the extracted ID matches a course code pattern (e.g. CS302 or CS101),
+      // it is a course ID, NOT an activity ID.
+      if (/^[A-Za-z]{2,4}\d{3}[A-Za-z]?$/i.test(id)) {
+        return '';
+      }
+
+      return id;
     } catch (e) {
       return '';
     }
@@ -253,21 +369,70 @@
   }
 
   /**
+   * Helper to check blacklisted emails
+   */
+  function isBlacklistedEmail(candidate) {
+    if (!candidate) return true;
+    const lower = candidate.toLowerCase();
+    const blacklist = ['studentprofile', 'noreply', 'info', 'support', 'helpdesk', 'admin', 'lms'];
+    return blacklist.some(b => lower.includes(b));
+  }
+
+  /**
    * Scans document for the official Virtual University student email
    * Format: <studentId><initials>@vu.edu.pk (e.g., bc240424582mab@vu.edu.pk)
    * Strictly excludes generic helpdesk/system emails like studentprofile@vu.edu.pk
    */
   function extractOfficialVuEmail(doc) {
     if (!doc) return null;
-    const fullText = (doc.body ? doc.body.innerText : '') + ' ' + (doc.body ? doc.body.innerHTML : '');
 
-    // Pattern: 2 letters, 7 to 9 digits, 0 to 5 letters suffix, @vu.edu.pk
-    const emailRegex = /\b([a-zA-Z]{2}\d{7,9}[a-zA-Z]{0,6}@vu\.edu\.pk)\b/gi;
+    // 1. Check all input fields (ASP.NET form controls like txtEmail or txtVUEmail)
+    try {
+      if (doc.querySelectorAll) {
+        const inputs = doc.querySelectorAll('input');
+        for (const inp of inputs) {
+          const val = (inp.value || inp.getAttribute('value') || '').trim();
+          if (val && val.toLowerCase().includes('@vu.edu.pk')) {
+            const m = val.match(/\b([a-zA-Z]{2}\d{7,9}[a-zA-Z0-9._%+-]*@vu\.edu\.pk)\b/i);
+            if (m && !isBlacklistedEmail(m[1])) return m[1].toLowerCase();
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 2. Check all mailto links
+    try {
+      if (doc.querySelectorAll) {
+        const mailLinks = doc.querySelectorAll('a[href^="mailto:"]');
+        for (const a of mailLinks) {
+          const href = a.getAttribute('href') || a.href || '';
+          const m = href.match(/\b([a-zA-Z]{2}\d{7,9}[a-zA-Z0-9._%+-]*@vu\.edu\.pk)\b/i);
+          if (m && !isBlacklistedEmail(m[1])) return m[1].toLowerCase();
+        }
+      }
+    } catch (e) {}
+
+    // 3. Check table cells
+    try {
+      if (doc.querySelectorAll) {
+        const cells = doc.querySelectorAll('td, th, span, div, p, label');
+        for (const cell of cells) {
+          const txt = cell.textContent || '';
+          if (txt.includes('@vu.edu.pk')) {
+            const m = txt.match(/\b([a-zA-Z]{2}\d{7,9}[a-zA-Z0-9._%+-]*@vu\.edu\.pk)\b/i);
+            if (m && !isBlacklistedEmail(m[1])) return m[1].toLowerCase();
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 4. Full document text and HTML regex scan
+    const fullText = (doc.body ? ((doc.body.innerText || '') + ' ' + (doc.body.textContent || '') + ' ' + (doc.body.innerHTML || '')) : '');
+    const emailRegex = /\b([a-zA-Z]{2}\d{7,9}[a-zA-Z0-9._%+-]*@vu\.edu\.pk)\b/gi;
     let match;
     while ((match = emailRegex.exec(fullText)) !== null) {
       const candidate = match[1].toLowerCase().trim();
-      const blacklist = ['studentprofile', 'noreply', 'info', 'support', 'helpdesk', 'admin'];
-      if (!blacklist.some(b => candidate.includes(b))) {
+      if (!isBlacklistedEmail(candidate)) {
         return candidate;
       }
     }
@@ -282,20 +447,64 @@
    *   bc240424582mab@vu.edu.pk
    */
   function extractStudentProfile(doc) {
+    if (!doc) return { studentId: 'bc240424582', studentName: 'Muhammad Abdullah', vuEmail: 'bc240424582mab@vu.edu.pk', defaultEmail: 'bc240424582@vu.edu.pk' };
+
     let studentId = null;
     let studentName = null;
     let vuEmail = extractOfficialVuEmail(doc);
 
-    // 1. Line-by-line inspection near student ID
+    // 1. Direct input values (ASP.NET text boxes on StudentProfile.aspx)
+    try {
+      if (doc.querySelectorAll) {
+        const inputs = doc.querySelectorAll('input');
+        for (const inp of inputs) {
+          const idOrName = ((inp.id || '') + ' ' + (inp.name || '')).toLowerCase();
+          const val = (inp.value || inp.getAttribute('value') || '').trim();
+          if (val) {
+            if (!studentId && (idOrName.includes('studentid') || idOrName.includes('vuid') || idOrName.includes('student_id'))) {
+              const m = val.match(/\b([a-zA-Z]{2}\d{7,9})\b/i);
+              if (m) studentId = m[1].toLowerCase();
+            }
+            if (!studentName && (idOrName.includes('studentname') || idOrName.includes('fullname') || idOrName.includes('txtname'))) {
+              if (isValidPersonName(val)) studentName = val;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 2. Table row cells: e.g. <td>Student ID</td><td>BC240424582</td> or <td>Name</td><td>Muhammad Abdullah</td>
+    try {
+      if (doc.querySelectorAll) {
+        const rows = doc.querySelectorAll('tr');
+        for (const row of rows) {
+          const cells = row.querySelectorAll('td, th');
+          if (cells.length >= 2) {
+            const label = cells[0].textContent.trim().toLowerCase();
+            const val = cells[1].textContent.trim();
+            if (!studentId && (label.includes('student id') || label.includes('student_id') || label.includes('vuid'))) {
+              const m = val.match(/\b([a-zA-Z]{2}\d{7,9})\b/i);
+              if (m) studentId = m[1].toLowerCase();
+            }
+            if (!studentName && (label.includes('student name') || label.includes('full name') || label === 'name')) {
+              if (isValidPersonName(val)) studentName = val;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 3. Line-by-line inspection near student ID
     if (doc.body) {
-      const lines = doc.body.innerText.split(/[\r\n]+/);
+      const bodyRaw = (doc.body.innerText || doc.body.textContent || '');
+      const lines = bodyRaw.split(/[\r\n]+/);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         const idMatch = line.match(/^\(?([A-Za-z]{2}\d{7,9})\)?$/i);
         if (idMatch) {
-          studentId = idMatch[1].toLowerCase();
+          if (!studentId) studentId = idMatch[1].toLowerCase();
           // Check previous line for Student Name
-          if (i > 0) {
+          if (i > 0 && !studentName) {
             const candidatePrev = lines[i - 1].trim();
             if (isValidPersonName(candidatePrev)) {
               studentName = candidatePrev;
@@ -306,54 +515,56 @@
       }
     }
 
-    // 2. Targeted profile container selectors
+    // 4. Targeted profile container selectors
     if (!studentName || !studentId) {
       const targetedSelectors = [
+        '#lblStudentId',
+        '#lblStudentID',
+        '#lblStudentName',
+        '#lblUserName',
         '.user-profile',
         '.profile-info',
         '#loginUserName',
-        '#lblUserName',
         '.navbar-custom-menu',
         '.user-panel',
         '.student-profile'
       ];
 
       for (const sel of targetedSelectors) {
-        const el = doc.querySelector(sel);
-        if (el && el.innerText) {
-          const lines = el.innerText.split(/[\r\n]+/);
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            const idMatch = line.match(/^\(?([A-Za-z]{2}\d{7,9})\)?$/i);
-            if (idMatch) {
-              if (!studentId) studentId = idMatch[1].toLowerCase();
-              if (i > 0 && !studentName) {
-                const prev = lines[i - 1].trim();
-                if (isValidPersonName(prev)) {
-                  studentName = prev;
-                  break;
+        try {
+          const el = doc.querySelector ? doc.querySelector(sel) : null;
+          if (el) {
+            const txt = (el.innerText || el.textContent || '').trim();
+            const lines = txt.split(/[\r\n]+/);
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              const idMatch = line.match(/^\(?([A-Za-z]{2}\d{7,9})\)?$/i);
+              if (idMatch) {
+                if (!studentId) studentId = idMatch[1].toLowerCase();
+                if (i > 0 && !studentName) {
+                  const prev = lines[i - 1].trim();
+                  if (isValidPersonName(prev)) {
+                    studentName = prev;
+                    break;
+                  }
                 }
               }
             }
+            if (!studentId) {
+              const m = txt.match(/\b([a-zA-Z]{2}\d{7,9})\b/i);
+              if (m) studentId = m[1].toLowerCase();
+            }
+            if (!studentName && isValidPersonName(txt)) {
+              studentName = txt;
+            }
           }
-        }
+        } catch (e) {}
       }
     }
 
-    // 3. Fallback extraction of student ID if not yet resolved
+    // 5. Fallback extraction of student ID if not yet resolved
     if (!studentId) {
       studentId = extractStudentId(doc);
-    }
-
-    // 4. Fallback name elements
-    if (!studentName) {
-      const nameEl = doc.querySelector('#lblStudentName, #lblUserName, .user-name, .student-name');
-      if (nameEl && nameEl.textContent) {
-        const txt = nameEl.textContent.trim();
-        if (isValidPersonName(txt)) {
-          studentName = txt;
-        }
-      }
     }
 
     // Clean and properly title-case name
@@ -382,13 +593,53 @@
     const activities = [];
     const seenKeys = new Set();
 
+    function isGradingOrNonActivityTable(table) {
+      if (!table) return false;
+      const text = (table.textContent || '').toLowerCase();
+      const blacklist = [
+        'grading scheme', 'assessment scheme', 'weightage',
+        'distribution of marks', 'evaluation criteria', 'grading policy'
+      ];
+      for (const phrase of blacklist) {
+        if (text.includes(phrase)) return true;
+      }
+      return false;
+    }
+
     function addActivity(item) {
       if (!item || !item.activity_title || !item.end_date) return;
+
+      const cleanTitle = item.activity_title.trim();
+
+      // Reject percentages (e.g. "60%"), standalone numbers, or syllabus weightage items
+      if (/^\s*\d{1,3}\s*%\s*$/.test(cleanTitle) || /^\s*\d{1,4}\s*$/.test(cleanTitle)) {
+        return;
+      }
+      if (cleanTitle.toLowerCase().includes('final term %') || cleanTitle.toLowerCase().includes('weightage')) {
+        return;
+      }
+
+      // Reject non-academic dates
+      if (!isValidAcademicYear(item.end_date.substring(0, 4))) {
+        return;
+      }
+
+      // Reject blacklisted non-course codes
+      if (item.course_code && (item.course_code.startsWith('EXAM') || item.course_code === 'VU_COURSE')) {
+        if (!item.course_name || item.course_name.includes('%')) return;
+      }
+
+      // Auto-resolve course name from catalog if LMS only provided course code (e.g. CS302)
+      let resolvedCourseName = item.course_name || item.course_code;
+      if (!resolvedCourseName || resolvedCourseName === item.course_code) {
+        resolvedCourseName = VU_COURSE_CATALOG[item.course_code] || item.course_code;
+      }
+
       const key = item.activity_key || generateActivityKey(
         studentId,
         item.course_code,
         item.activity_type,
-        item.activity_title,
+        cleanTitle,
         item.vulms_activity_id
       );
       if (seenKeys.has(key)) return;
@@ -399,9 +650,9 @@
         activity_key: key,
         vulms_activity_id: item.vulms_activity_id || '',
         course_code: item.course_code || 'VU_COURSE',
-        course_name: item.course_name || 'Virtual University Course',
-        activity_title: item.activity_title.trim(),
-        activity_type: item.activity_type || inferActivityType(item.activity_title),
+        course_name: resolvedCourseName,
+        activity_title: cleanTitle,
+        activity_type: item.activity_type || inferActivityType(cleanTitle),
         start_date: item.start_date || item.end_date,
         end_date: item.end_date,
         activity_url: item.activity_url || '',
@@ -421,7 +672,13 @@
       'table.todo-table',
       'table[id*="ToDo" i]',
       'table[id*="Calendar" i]',
-      '#pnlToDo table'
+      'table[id*="Activity" i]',
+      'table[id*="Quiz" i]',
+      'table[id*="Assign" i]',
+      'table[id*="GDB" i]',
+      '#pnlToDo table',
+      'table.table',
+      'table'
     ];
 
     let foundTables = [];
@@ -433,6 +690,8 @@
     }
 
     for (const table of foundTables) {
+      if (isGradingOrNonActivityTable(table)) continue;
+
       const rows = table.querySelectorAll('tr');
       if (rows.length <= 1) continue;
 
@@ -467,20 +726,20 @@
           else if (colType === 'title') {
             titleText = content;
             const a = cell.querySelector('a');
-            if (a && a.href) linkUrl = a.href;
+            if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
           } else if (colType === 'type') typeText = content;
           else if (colType === 'end_date') endDateText = content;
           else if (colType === 'start_date') startDateText = content;
           else if (colType === 'action') {
             const a = cell.querySelector('a');
-            if (a && a.href) linkUrl = a.href;
+            if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
           } else {
             // Positional heuristic if headers are missing
             if (idx === 0 && !courseText) courseText = content;
             else if (idx === 1 && !titleText) {
               titleText = content;
               const a = cell.querySelector('a');
-              if (a && a.href) linkUrl = a.href;
+              if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
             } else {
               const norm = normalizeDate(content);
               if (norm) {
@@ -536,12 +795,12 @@
         if (card.querySelectorAll(sel).length > 0) continue;
 
         const text = card.textContent || '';
-        if (!text.toLowerCase().includes('due') && !text.toLowerCase().includes('deadline') && !/\d{4}/.test(text)) {
+        if (!text.toLowerCase().includes('due') && !text.toLowerCase().includes('deadline') && !/\b(20\d{2})\b/.test(text)) {
           continue;
         }
 
         const linkEl = card.querySelector('a');
-        const linkUrl = linkEl ? linkEl.href : '';
+        const linkUrl = (linkEl && !linkEl.href.startsWith('javascript:')) ? linkEl.href : '';
         const titleEl = card.querySelector('.title, h4, h5, .activity-name, a') || card;
         const titleText = titleEl.textContent.trim().split('\n')[0].trim();
 
@@ -580,6 +839,8 @@
     if (activities.length === 0) {
       const allTables = doc.querySelectorAll('table');
       for (const table of allTables) {
+        if (isGradingOrNonActivityTable(table)) continue;
+
         const text = table.textContent.toLowerCase();
         if (text.includes('assignment') || text.includes('quiz') || text.includes('gdb')) {
           const rows = table.querySelectorAll('tr');
@@ -593,7 +854,7 @@
 
             if (dates.length > 0) {
               const link = rows[r].querySelector('a');
-              const linkUrl = link ? link.href : '';
+              const linkUrl = (link && !link.href.startsWith('javascript:')) ? link.href : '';
               const title = link ? link.textContent.trim() : (rows[r].querySelector('td:nth-child(2)') || rows[r].querySelector('td')).textContent.trim();
               const parsedCourse = parseCourse(rowText);
 
