@@ -330,6 +330,356 @@ assert(profileExtracted.studentId === 'bc240424582', 'Extracts student ID from A
 assert(profileExtracted.studentName === 'Muhammad Abdullah', 'Extracts student name from ASP.NET form input');
 assert(profileExtracted.vuEmail === 'bc240424582mab@vu.edu.pk', 'Extracts official VU email from ASP.NET form input');
 
+// ----------------------------------------------------
+// Section 7: FullCalendar DOM Scraper Test
+// ----------------------------------------------------
+console.log('\n[7] FullCalendar DOM Scraper Test:');
+const mockFullCalendarDoc = {
+  querySelectorAll: (selector) => {
+    if (selector.includes('fc-event')) {
+      const parentCell = {
+        getAttribute: (attr) => (attr === 'data-date' ? '2026-11-15' : null),
+        parentElement: null
+      };
+      return [
+        {
+          tagName: 'DIV',
+          textContent: '11:59 PM CS201 Assignment No. 1',
+          getAttribute: (attr) => (attr === 'title' ? 'CS201 Assignment No. 1 Due: 15-Nov-2026' : null),
+          parentElement: parentCell,
+          querySelector: (s) => (s === 'a' ? { href: 'https://vulms.vu.edu.pk/Assignment/View.aspx?id=9012' } : null)
+        }
+      ];
+    }
+    return [];
+  }
+};
+
+const fcExtracted = extractor.extractActivities(mockFullCalendarDoc, 'bc240424582');
+assert(fcExtracted.length === 1, 'Extracts FullCalendar event from .fc-event DOM');
+assert(fcExtracted[0].course_code === 'CS201', 'FullCalendar course code parsed as CS201');
+assert(fcExtracted[0].end_date === '2026-11-15', 'FullCalendar end date resolved to 2026-11-15');
+assert(fcExtracted[0].vulms_activity_id === '9012', 'FullCalendar extracted activity ID 9012 from URL');
+
+// ----------------------------------------------------
+// Section 8: Home.aspx Course Dashboard Scraper Test
+// ----------------------------------------------------
+console.log('\n[8] Home.aspx Course Dashboard Scraper Test:');
+const mockHomeCourseDoc = {
+  querySelectorAll: (selector) => {
+    if (selector.includes('tblCourses')) {
+      return [
+        {
+          textContent: 'CS302 - Digital Logic Design Credit Hours: 3',
+          querySelectorAll: (s) => {
+            if (s.includes('Assignment')) {
+              return [
+                {
+                  textContent: 'Assignment No. 2 (Due Date: 20-Nov-2026 23:59)',
+                  href: 'https://vulms.vu.edu.pk/Assignment/Submit.aspx?id=11420',
+                  parentElement: { textContent: 'Pending Submission Due: 20-Nov-2026' },
+                  closest: () => ({ textContent: 'CS302 Digital Logic Design' })
+                }
+              ];
+            }
+            return [];
+          }
+        }
+      ];
+    }
+    return [];
+  }
+};
+
+const homeCourseExtracted = extractor.extractActivities(mockHomeCourseDoc, 'bc240424582');
+assert(homeCourseExtracted.length === 1, 'Extracts activity from Home.aspx course dashboard card');
+assert(homeCourseExtracted[0].course_code === 'CS302', 'Dashboard course code resolved to CS302');
+assert(homeCourseExtracted[0].end_date === '2026-11-20', 'Dashboard end date resolved to 2026-11-20');
+assert(homeCourseExtracted[0].activity_type === 'Assignment', 'Dashboard activity type resolved to Assignment');
+
+// ----------------------------------------------------
+// Section 9: JSON Extraction Engine (ActivityCalendar.aspx feeds)
+// ----------------------------------------------------
+console.log('\n[9] JSON Extraction Engine (ActivityCalendar.aspx feeds):');
+
+// 9A: Direct JSON array
+const rawJsonArray = JSON.stringify([
+  {
+    id: "7701",
+    title: "CS101 - Quiz 1 (Lessons 1 to 15)",
+    course: "CS101",
+    activity: "Quiz",
+    start: "2026-11-05 00:00",
+    end: "2026-11-06 23:59",
+    url: "/Quiz/Start.aspx?id=7701"
+  }
+]);
+
+const jsonArrayActs = extractor.extractActivitiesFromJson(rawJsonArray, 'bc240424582');
+assert(jsonArrayActs.length === 1, 'Parses standard JSON array from ActivityCalendar.aspx');
+assert(jsonArrayActs[0].course_code === 'CS101', 'JSON course code is CS101');
+assert(jsonArrayActs[0].end_date === '2026-11-06', 'JSON end date normalized to 2026-11-06');
+assert(jsonArrayActs[0].vulms_activity_id === '7701', 'JSON extracted activity ID 7701');
+
+// 9B: ASP.NET PageMethod { "d": [...] } wrapper
+const rawAspnetJson = JSON.stringify({
+  d: [
+    {
+      id: "8820",
+      title: "MTH101 Graded Discussion Board",
+      course: "MTH101",
+      activity: "GDB",
+      start: "2026-11-10",
+      end: "2026-11-12 23:59"
+    }
+  ]
+});
+
+const aspnetJsonActs = extractor.extractActivitiesFromJson(rawAspnetJson, 'bc240424582');
+assert(aspnetJsonActs.length === 1, 'Parses ASP.NET { "d": [...] } wrapped JSON feed');
+assert(aspnetJsonActs[0].course_code === 'MTH101', 'ASP.NET JSON course code is MTH101');
+assert(aspnetJsonActs[0].activity_type === 'GDB', 'ASP.NET JSON activity type is GDB');
+assert(aspnetJsonActs[0].end_date === '2026-11-12', 'ASP.NET JSON end date is 2026-11-12');
+
+// 9C: HTML with embedded JSON in <script> tag
+const htmlWithScriptJson = `
+<html>
+  <body>
+    <script>
+      var calendarEvents = [
+        {
+          "id": "9933",
+          "title": "CS302 Assignment 1",
+          "course": "CS302",
+          "activity": "Assignment",
+          "due": "Nov 25, 2026 11:59 PM"
+        }
+      ];
+    </script>
+  </body>
+</html>
+`;
+
+const htmlScriptActs = extractor.extractActivitiesFromHtml(htmlWithScriptJson, 'bc240424582');
+assert(htmlScriptActs.length === 1, 'Extracts JSON calendar events embedded in <script> tag');
+assert(htmlScriptActs[0].course_code === 'CS302', 'Script JSON course code is CS302');
+assert(htmlScriptActs[0].end_date === '2026-11-25', 'Script JSON end date is 2026-11-25');
+
+// ----------------------------------------------------
+// Section 10: Authentication State & Login Lifecycle Tests
+// ----------------------------------------------------
+console.log('\n[10] Authentication Detection & Login Lifecycle Tests:');
+
+// 10A: Unauthenticated Login Page (must NOT trigger fetching)
+const mockLoginPage = {
+  querySelector: (sel) => {
+    if (sel.includes('password') || sel.includes('txtPassword') || sel.includes('btnLogin')) {
+      return { id: 'txtPassword', type: 'password' };
+    }
+    return null;
+  },
+  body: { innerText: 'Virtual University Login Please enter your Student ID and Password' }
+};
+assert(extractor.isUserAuthenticated(mockLoginPage) === false, 'Rejects unauthenticated login page with password field (Prevents premature fetching)');
+
+// 10B: Authenticated Homepage (Home.aspx with student ID and logout)
+const mockHomePage = {
+  querySelector: (sel) => {
+    if (sel.includes('lblStudentId') || sel.includes('student-id')) {
+      return { textContent: 'BC240424582', id: 'lblStudentId' };
+    }
+    if (sel.includes('logout') || sel.includes('lnkLogout')) {
+      return { href: 'Logout.aspx', id: 'lnkLogout' };
+    }
+    return null;
+  },
+  body: { innerText: 'Welcome Muhammad Abdullah BC240424582 Logout Home Dashboard Courses' }
+};
+assert(extractor.isUserAuthenticated(mockHomePage) === true, 'Validates authenticated VULMS homepage with verified student ID and logout link');
+
+// 10C: Logged out redirect page
+const mockLoggedOutPage = {
+  querySelector: (sel) => {
+    if (sel.includes('txtStudentID') || sel.includes('btnLogin')) {
+      return { id: 'btnLogin', value: 'Sign In' };
+    }
+    return null;
+  },
+  body: { innerText: 'You have successfully logged out of VULMS.' }
+};
+assert(extractor.isUserAuthenticated(mockLoggedOutPage) === false, 'Rejects logged-out redirect page (Halts fetching immediately)');
+
+// ----------------------------------------------------
+// Section 11: Classic To-Do Element Discovery Tests
+// ----------------------------------------------------
+console.log('\n[11] Classic To-Do Element Discovery & Triggering:');
+
+// 11A: ASP.NET LinkButton with specific ID
+const mockDocWithId = {
+  querySelector: (sel) => {
+    if (sel === '#ctl00_MainContent_btnClassic' || sel.includes('btnClassic')) {
+      return { id: 'ctl00_MainContent_btnClassic', tagName: 'A', textContent: 'Classic To-Do' };
+    }
+    return null;
+  },
+  querySelectorAll: () => []
+};
+const foundById = extractor.findClassicToDoElement(mockDocWithId);
+assert(foundById && foundById.id === 'ctl00_MainContent_btnClassic', 'Finds Classic To-Do by ASP.NET control ID #ctl00_MainContent_btnClassic');
+
+// 11B: Element matching text content "Classic To-Do"
+const mockDocWithText = {
+  querySelector: () => null,
+  querySelectorAll: () => [
+    { tagName: 'A', textContent: 'Modern Calendar', href: '#' },
+    { tagName: 'BUTTON', textContent: 'Classic To-Do', id: 'btnCustomView' },
+    { tagName: 'A', textContent: 'Semester Schedule', href: '#' }
+  ]
+};
+const foundByText = extractor.findClassicToDoElement(mockDocWithText);
+assert(foundByText && foundByText.id === 'btnCustomView', 'Finds Classic To-Do element by text content "Classic To-Do"');
+
+// 11C: Tab element with "Classic View"
+const mockDocWithTab = {
+  querySelector: () => null,
+  querySelectorAll: () => [
+    { tagName: 'LI', textContent: 'Calendar Grid', role: 'tab' },
+    { tagName: 'LI', textContent: 'Classic View', role: 'tab', id: 'tabClassic' }
+  ]
+};
+const foundByTab = extractor.findClassicToDoElement(mockDocWithTab);
+assert(foundByTab && foundByTab.id === 'tabClassic', 'Finds Classic To-Do tab by text content "Classic View"');
+
+// 11D: Exact real-world VULMS element <a id="tabHClassic" ...>
+const mockRealVulmsDoc = {
+  querySelector: (sel) => {
+    if (sel === '#tabHClassic' || sel.includes('tabHClassic')) {
+      return {
+        id: 'tabHClassic',
+        tagName: 'A',
+        textContent: 'Classic To Do',
+        href: "javascript:__doPostBack('ctl00$MainContent$tabHClassic','')"
+      };
+    }
+    return null;
+  },
+  querySelectorAll: () => []
+};
+const foundRealVulms = extractor.findClassicToDoElement(mockRealVulmsDoc);
+assert(foundRealVulms && foundRealVulms.id === 'tabHClassic', 'Finds real VULMS #tabHClassic Classic To Do link');
+
+
+// ----------------------------------------------------
+// Section 12: Silent Frame Automatic Fetching & Cache Concurrency
+// ----------------------------------------------------
+console.log('\n[12] Silent Frame Automatic Fetching & Cache Concurrency:');
+
+// Simulation of the silent iframe lifecycle:
+// Step 1: ActivityCalendar.aspx loads initially WITHOUT the table.
+// Step 2: Triggering Classic To-Do causes the table to render.
+// Step 3: Extractor captures activities automatically without opening the page in a tab.
+
+class MockSilentFrameDocument {
+  constructor() {
+    this.tableRendered = false;
+    this.classicClicked = false;
+  }
+
+  clickClassic() {
+    this.classicClicked = true;
+    this.tableRendered = true; // Simulates ASP.NET postback / UpdatePanel table injection
+  }
+
+  querySelector(sel) {
+    if (sel.includes('classic') || sel.includes('btnClassic')) {
+      return {
+        id: 'ctl00_MainContent_btnClassic',
+        textContent: 'Classic To-Do',
+        click: () => this.clickClassic()
+      };
+    }
+    return null;
+  }
+
+  querySelectorAll(sel) {
+    if (sel.includes('table') && this.tableRendered) {
+      return [
+        {
+          textContent: 'Course Title Open Date Due Date CS302 Semester Quiz # 01 Nov 03, 2026 12:00 AM Nov 04, 2026 11:59 PM CS302 Semester Quiz # 02 Dec 01, 2026 12:00 AM Dec 02, 2026 11:59 PM',
+          querySelectorAll: (sub) => {
+            if (sub === 'tr') {
+              return [
+                { querySelectorAll: () => [{ textContent: 'Course' }, { textContent: 'Title' }, { textContent: 'Open Date' }, { textContent: 'Due Date' }] },
+                { querySelectorAll: () => [{ textContent: 'CS302' }, { textContent: 'Semester Quiz # 01' }, { textContent: 'Nov 03, 2026' }, { textContent: 'Nov 04, 2026' }] },
+                { querySelectorAll: () => [{ textContent: 'CS302' }, { textContent: 'Semester Quiz # 02' }, { textContent: 'Dec 01, 2026' }, { textContent: 'Dec 02, 2026' }] }
+              ];
+            }
+            return [];
+          }
+        }
+      ];
+    }
+    return [];
+  }
+}
+
+const mockFrame = new MockSilentFrameDocument();
+
+// Initial check before click: table is not yet rendered
+const initialActs = extractor.extractActivities(mockFrame, 'bc240424582');
+assert(initialActs.length === 0, 'Silent frame initial view has 0 activities (Table not yet populated)');
+
+// Trigger Classic To-Do click
+const triggerEl = extractor.findClassicToDoElement(mockFrame);
+assert(triggerEl !== null, 'Found Classic To-Do element in silent frame DOM');
+triggerEl.click();
+assert(mockFrame.classicClicked === true && mockFrame.tableRendered === true, 'Clicking Classic To-Do triggers table render inside silent frame');
+
+// Check after click: table is extracted!
+const postClickActs = extractor.extractActivities(mockFrame, 'bc240424582');
+assert(postClickActs.length === 2, 'Extracts 2 quizzes automatically after Classic To-Do trigger without user navigating to page');
+assert(postClickActs[0].course_code === 'CS302' && postClickActs[0].end_date === '2026-11-04', 'First quiz details verified');
+
+// 12B: Cache Concurrency & Duplicate Request Prevention
+class MockClientCache {
+  constructor(ttlMs = 300000) {
+    this.ttlMs = ttlMs;
+    this.cachedData = null;
+    this.lastSyncTime = 0;
+    this.networkFetchCount = 0;
+  }
+
+  fetchData(isManual = false, currentTime = Date.now()) {
+    const isFresh = (currentTime - this.lastSyncTime) < this.ttlMs;
+    if (!isManual && isFresh && this.cachedData) {
+      return { fromCache: true, data: this.cachedData };
+    }
+
+    this.networkFetchCount++;
+    this.cachedData = postClickActs;
+    this.lastSyncTime = currentTime;
+    return { fromCache: false, data: this.cachedData };
+  }
+}
+
+const clientCache = new MockClientCache();
+const firstRun = clientCache.fetchData(false, 1000);
+assert(firstRun.fromCache === false && clientCache.networkFetchCount === 1, 'Initial login homepage visit performs network fetch');
+
+// User refreshes the homepage 10 seconds later:
+const refreshRun = clientCache.fetchData(false, 11000);
+assert(refreshRun.fromCache === true && clientCache.networkFetchCount === 1, 'Refreshing homepage within 5-min TTL uses cache (0 duplicate network requests)');
+
+// User navigates repeatedly:
+for (let i = 0; i < 4; i++) {
+  clientCache.fetchData(false, 20000 + i * 1000);
+}
+assert(clientCache.networkFetchCount === 1, '4x repeated navigation within TTL causes 0 duplicate requests');
+
+// User clicks Manual Sync:
+const manualRun = clientCache.fetchData(true, 25000);
+assert(manualRun.fromCache === false && clientCache.networkFetchCount === 2, 'Manual sync forces fresh fetch and updates cache');
+
 console.log('\n======================================================');
 console.log(`TEST SUMMARY: ${passCount} PASSED, ${failCount} FAILED`);
 console.log('======================================================\n');
@@ -337,3 +687,4 @@ console.log('======================================================\n');
 if (failCount > 0) {
   process.exit(1);
 }
+

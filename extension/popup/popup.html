@@ -93,6 +93,30 @@
       </div>
     </div>
 
+    <!-- Google Sheet Backend Connection Card -->
+    <div class="email-setup-card" id="backendCard">
+      <div class="email-header">
+        <div class="email-title-group">
+          <svg class="mail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+          <span class="email-card-label">Google Sheet Web App URL</span>
+        </div>
+        <span class="email-hint-pill" id="backendStatusPill">Setup Needed</span>
+      </div>
+
+      <div class="email-input-row">
+        <input type="url" id="inputWebAppUrl" class="email-input" placeholder="Paste Apps Script URL (https://script.google.com/...)">
+        <button id="btnSaveWebAppUrl" class="btn-save-inline" title="Save Backend URL">
+          <span>Connect</span>
+        </button>
+      </div>
+      <p class="email-subtext" id="backendHintText">
+        Required to sync rows to Sheet & trigger 12:00 PM email reminders.
+      </p>
+    </div>
+
     <!-- Notification Email Card -->
     <div class="email-setup-card">
       <div class="email-header">

@@ -48,12 +48,22 @@ async function postToGoogleAppsScript(webAppUrl, payload) {
     redirect: 'follow'
   });
 
+  const rawText = await response.text().catch(() => '');
+
   if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    throw new Error(`Server responded with HTTP ${response.status}: ${errorText.substring(0, 100)}`);
+    throw new Error(`Server responded with HTTP ${response.status}: ${rawText.substring(0, 100)}`);
   }
 
-  const responseData = await response.json();
+  let responseData;
+  try {
+    responseData = JSON.parse(rawText);
+  } catch (parseErr) {
+    if (rawText.includes('<html') || rawText.includes('<!DOCTYPE') || rawText.includes('accounts.google.com') || rawText.includes('Sign in')) {
+      throw new Error('Google Apps Script permission error: In Apps Script, click Deploy > Manage deployments > edit > set "Who has access" to "Anyone"');
+    }
+    throw new Error(`Invalid response from Apps Script: ${rawText.substring(0, 100)}`);
+  }
+
   return responseData;
 }
 
@@ -81,14 +91,16 @@ async function handleActivitiesSync(data) {
 
   if (!webAppUrl) {
     console.warn('[VULMS Background] Web App URL not configured.');
-    updateBadge('SETUP', '#f59e0b'); // amber
+    const actCount = (data.activities && data.activities.length > 0) ? data.activities.length : 0;
+    updateBadge(actCount > 0 ? String(actCount) : 'SETUP', '#f59e0b'); // amber
     await chrome.storage.local.set({
       lastSyncStatus: 'unconfigured',
       studentId: data.studentId,
       studentName: data.studentName || settings.studentName,
-      cachedActivities: data.activities
+      cachedActivities: data.activities || [],
+      pendingRemindersCount: actCount
     });
-    return { success: false, reason: 'unconfigured' };
+    return { success: false, reason: 'unconfigured', count: actCount };
   }
 
   updateBadge('SYNC', '#3b82f6'); // blue
@@ -208,8 +220,29 @@ function setupFrameHeaderRules() {
 // Initialize rules immediately
 setupFrameHeaderRules();
 
+// Navigation detector: Listen for navigation to VULMS homepage
+if (chrome.tabs && chrome.tabs.onUpdated) {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tab && tab.url && tab.url.includes('vu.edu.pk')) {
+      const urlLower = tab.url.toLowerCase();
+      if (urlLower.includes('/home.aspx') || urlLower.endsWith('/home.aspx')) {
+        chrome.tabs.sendMessage(tabId, { action: 'VULMS_HOMEPAGE_NAVIGATED' }, () => {
+          if (chrome.runtime.lastError) {}
+        });
+      }
+    }
+  });
+}
+
 // Runtime message router
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'VULMS_USER_LOGGED_OUT') {
+    chrome.storage.local.set({ lastSyncStatus: 'logged_out' });
+    updateBadge('', null);
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (request.action === 'UPDATE_STUDENT_EMAIL') {
     const newEmail = request.personalEmail;
     chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentId', 'studentName', 'vuEmail', 'cachedActivities'], async (store) => {
@@ -248,19 +281,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'VULMS_ACTIVITIES_EXTRACTED') {
     handleActivitiesSync(request.data).then((res) => {
-      // Broadcast toast notification to all open VULMS tabs (e.g. Home.aspx)
-      if (res && res.success && request.data.activities && request.data.activities.length > 0) {
-        chrome.tabs.query({ url: '*://*.vu.edu.pk/*' }, (tabs) => {
-          if (tabs && tabs.length > 0) {
-            for (const t of tabs) {
-              chrome.tabs.sendMessage(t.id, {
-                action: 'SHOW_SYNC_TOAST',
-                count: request.data.activities.length
-              }).catch(() => {});
-            }
-          }
-        });
-      }
       sendResponse(res);
     });
     return true; // Keep channel open for async response
@@ -380,26 +400,69 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'TRIGGER_RESYNC_ACTIVE_TAB') {
-    chrome.tabs.query({ url: '*://*.vu.edu.pk/*' }, (vulmsTabs) => {
-      if (vulmsTabs && vulmsTabs.length > 0) {
-        chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
-          const targetTab = (activeTabs[0] && activeTabs[0].url && activeTabs[0].url.includes('vu.edu.pk'))
-            ? activeTabs[0]
-            : vulmsTabs[0];
+  if (request.action === 'VULMS_PAGE_SCANNED') {
+    const { studentId, studentName, count, timestamp } = request.data || {};
+    chrome.storage.local.get(['webAppUrl', 'cachedActivities', 'lastSyncStatus'], async (store) => {
+      const updates = {
+        studentId: studentId || store.studentId || 'BC240424582',
+        studentName: studentName || store.studentName || 'Muhammad Abdullah'
+      };
+      if (count > 0) {
+        updates.lastSyncTime = timestamp || new Date().toISOString();
+      }
+      if (store.lastSyncStatus !== 'unconfigured') {
+        updates.lastSyncStatus = 'success';
+      }
+      await chrome.storage.local.set(updates);
+    });
+    sendResponse({ success: true });
+    return true;
+  }
 
-          chrome.tabs.sendMessage(targetTab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (tabRes) => {
-            if (chrome.runtime.lastError || !tabRes) {
-              // If tab communication timed out, resync from local storage cache
-              syncFromStorageCache(sendResponse);
+  if (request.action === 'TRIGGER_RESYNC_ACTIVE_TAB') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+      const activeTab = (activeTabs && activeTabs[0] && activeTabs[0].url && activeTabs[0].url.includes('vu.edu.pk'))
+        ? activeTabs[0]
+        : null;
+
+      const proceedWithTab = (tab) => {
+        chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (tabRes) => {
+          if (chrome.runtime.lastError || !tabRes) {
+            // Tab was already open before extension reload; programmatically inject scripts
+            if (chrome.scripting && tab.id) {
+              chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['content/extractor.js', 'content/content.js']
+              }, () => {
+                setTimeout(() => {
+                  chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (retryRes) => {
+                    if (retryRes) {
+                      sendResponse(retryRes);
+                    } else {
+                      syncFromStorageCache(sendResponse);
+                    }
+                  });
+                }, 400);
+              });
             } else {
-              sendResponse(tabRes);
+              syncFromStorageCache(sendResponse);
             }
-          });
+          } else {
+            sendResponse(tabRes);
+          }
         });
+      };
+
+      if (activeTab) {
+        proceedWithTab(activeTab);
       } else {
-        // No VULMS tab open right now, sync existing cached activities directly to Google Sheets!
-        syncFromStorageCache(sendResponse);
+        chrome.tabs.query({ url: '*://*.vu.edu.pk/*' }, (vulmsTabs) => {
+          if (vulmsTabs && vulmsTabs.length > 0) {
+            proceedWithTab(vulmsTabs[0]);
+          } else {
+            syncFromStorageCache(sendResponse);
+          }
+        });
       }
     });
     return true;

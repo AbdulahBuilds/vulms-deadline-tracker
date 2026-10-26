@@ -1,20 +1,24 @@
 /**
  * VULMS Smart Deadline Tracker - Content Script
  * 
- * Automatically triggers as soon as someone logs in or enters https://vulms.vu.edu.pk/Home.aspx.
- * Seamlessly fetches and syncs:
- *  1. https://vulms.vu.edu.pk/Profile/StudentProfile.aspx (official VU email & student profile)
- *  2. https://vulms.vu.edu.pk/ActivityCalendar/ActivityCalendar.aspx (all pending quiz/assignment deadlines)
+ * Automatically triggers as soon as an authenticated student logs in and enters
+ * https://vulms.vu.edu.pk/Home.aspx (or any VULMS page).
  * 
- * 100% Invisible Background Execution:
- * Uses high-speed direct fetch with invisible in-page iframe fallback.
- * ZERO extra tabs are ever opened.
+ * Architecture:
+ *  1. Non-blocking Authentication & Homepage Lifecycle Detection
+ *  2. Multi-Angle Academic Activity Discovery:
+ *     - Angle A: Live DOM scraping (To-Do tables, course boxes, FullCalendar)
+ *     - Angle B: Embedded child frame inspection
+ *     - Angle C: Direct fast fetch for ActivityCalendar endpoints
+ *     - Angle D: Silent In-Page Frame with Automatic "Classic To-Do" Trigger
+ *  3. In-Memory & Local Storage Caching with TTL & Concurrency Protection
+ *  4. 100% Invisible Background Execution: ZERO extra tabs ever opened.
  */
 
 (function () {
   'use strict';
 
-  // Prevent running inside child iframes
+  // Prevent running inside any child iframe (silent sync frame or VULMS child frames)
   if (window.top !== window.self) {
     return;
   }
@@ -23,13 +27,22 @@
     ? window.location.origin
     : 'https://vulms.vu.edu.pk';
 
-  const PROFILE_URL = `${BASE_URL}/Profile/StudentProfile.aspx`;
-  const CALENDAR_URL = `${BASE_URL}/ActivityCalendar/ActivityCalendar.aspx`;
+  // Cache configuration
+  const CACHE_TTL_MS = 60 * 1000; // 60 seconds freshness window
+  const MAX_AUTH_READINESS_ATTEMPTS = 6;
+  const AUTH_CHECK_INTERVAL_MS = 400;
 
+  // Runtime State
   let isSyncInProgress = false;
   let hasSyncedOnce = false;
+  let hasShownConnectedToast = false;
+  let domObserver = null;
+  let authReadinessTimeout = null;
+  let authReadinessAttempts = 0;
 
-  // Visual toast notification on VULMS page
+  /**
+   * Visual toast notification on VULMS page
+   */
   function showToast(message, type = 'info') {
     let container = document.getElementById('vulms-tracker-toast-container');
     if (!container) {
@@ -39,7 +52,7 @@
         position: fixed;
         bottom: 24px;
         right: 24px;
-        z-index: 9999999;
+        z-index: 99999999;
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -65,7 +78,7 @@
       font-size: 13px;
       line-height: 1.4;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-      max-width: 360px;
+      max-width: 380px;
       opacity: 0;
       transform: translateY(10px);
       transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -93,11 +106,147 @@
   }
 
   /**
-   * Helper: Loads a hidden, silent iframe with automatic cleanup
-   * Ensures 100% session cookies, ASP.NET WebForms rendering, and CSP compliance
-   * Completely invisible — ZERO tabs open on the tab strip.
+   * Helper: Checks if the current page is the VULMS homepage
    */
-  function loadAndExtractFromIframe(url, extractorFn, maxWaitMs = 6000) {
+  function isVulmsHomepage() {
+    const path = (window.location.pathname || '').toLowerCase();
+    return path === '' || path === '/' || path.includes('home.aspx') || path.includes('dashboard.aspx');
+  }
+
+  /**
+   * Helper: Checks if the current page is the To-Do Calendar or Classic To-Do view
+   */
+  function isVulmsClassicToDoPage() {
+    const path = (window.location.pathname || '').toLowerCase();
+    return path.includes('activitycalendar') || path.includes('studenttodo') || path.includes('todocalendar');
+  }
+
+  /**
+   * Helper: Disconnects dynamic DOM observer
+   */
+  function stopDomObserver() {
+    if (domObserver) {
+      try { domObserver.disconnect(); } catch (e) {}
+      domObserver = null;
+    }
+    if (authReadinessTimeout) {
+      clearTimeout(authReadinessTimeout);
+      authReadinessTimeout = null;
+    }
+  }
+
+  /**
+   * Helper: Fetch URL with automatic timeout and safe error handling
+   */
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 3500) {
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+      return null;
+    }
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timer = null;
+    if (controller) {
+      timer = setTimeout(() => {
+        try { controller.abort(); } catch (e) {}
+      }, timeoutMs);
+    }
+    try {
+      const fetchOpts = {
+        ...options,
+        credentials: 'include'
+      };
+      if (controller) {
+        fetchOpts.signal = controller.signal;
+      }
+      const response = await fetch(url, fetchOpts);
+      return response;
+    } catch (err) {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Dispatches the ASP.NET WebForms postback natively via form.submit,
+   * completely bypassing Chrome Manifest V3 CSP restrictions on javascript: URLs and eval.
+   */
+  function triggerAspnetPostBack(doc, target = 'ctl00$MainContent$tabHClassic', argument = '') {
+    if (!doc) return false;
+    const form = doc.forms[0] || (doc.querySelector ? doc.querySelector('form') : null);
+    if (!form) return false;
+
+    try {
+      let eventTarget = form.querySelector('input[name="__EVENTTARGET"]') || form.__EVENTTARGET;
+      if (!eventTarget) {
+        eventTarget = doc.createElement('input');
+        eventTarget.type = 'hidden';
+        eventTarget.name = '__EVENTTARGET';
+        eventTarget.id = '__EVENTTARGET';
+        form.appendChild(eventTarget);
+      }
+      eventTarget.value = target;
+
+      let eventArgument = form.querySelector('input[name="__EVENTARGUMENT"]') || form.__EVENTARGUMENT;
+      if (!eventArgument) {
+        eventArgument = doc.createElement('input');
+        eventArgument.type = 'hidden';
+        eventArgument.name = '__EVENTARGUMENT';
+        eventArgument.id = '__EVENTARGUMENT';
+        form.appendChild(eventArgument);
+      }
+      eventArgument.value = argument;
+
+      console.log(`[VULMS Tracker] Dispatching native ASP.NET form postback: __EVENTTARGET="${target}"`);
+      if (typeof form.submit === 'function') {
+        form.submit();
+      } else if (HTMLFormElement.prototype.submit) {
+        HTMLFormElement.prototype.submit.call(form);
+      }
+      return true;
+    } catch (e) {
+      console.warn('[VULMS Tracker] PostBack form submit error:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Finds and triggers the "Classic To-Do" button, link, or tab inside a document
+   * Handles CSP-safe ASP.NET WebForms postbacks without eval or inline script execution
+   */
+  function triggerClassicToDoInDoc(doc) {
+    if (!doc) return false;
+
+    let target = 'ctl00$MainContent$tabHClassic';
+    let arg = '';
+
+    // Search for the element (e.g. #tabHClassic, .nav-link, or by text)
+    const el = window.VulmsExtractor && window.VulmsExtractor.findClassicToDoElement
+      ? window.VulmsExtractor.findClassicToDoElement(doc)
+      : (doc.querySelector ? doc.querySelector('#tabHClassic, #ctl00_MainContent_tabHClassic, [id*="Classic" i]') : null);
+
+    if (el) {
+      console.log('[VULMS Tracker] Found Classic To-Do element:', el.id || el.textContent);
+      const rawHref = el.getAttribute('href') || el.href || '';
+      const match = rawHref.match(/__doPostBack\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/);
+      if (match) {
+        target = match[1];
+        arg = match[2] || '';
+      } else if (el.id) {
+        target = el.name || el.id.replace(/_/g, '$');
+      }
+    }
+
+    // Execute native ASP.NET form submit (100% CSP compliant)
+    return triggerAspnetPostBack(doc, target, arg);
+  }
+
+  /**
+   * Helper: Loads a hidden, silent iframe with automatic cleanup
+   * Ensures 100% session cookies, ASP.NET WebForms rendering, and CSP compliance.
+   * Automatically triggers "Classic To-Do" if needed and extracts the rendered table.
+   * Completely invisible — ZERO extra tabs ever opened.
+   */
+  function loadAndExtractFromIframe(url, extractorFn, maxWaitMs = 12000) {
     return new Promise((resolve) => {
       // Remove any lingering sync frames
       const oldFrames = document.querySelectorAll('.vulms-silent-sync-frame');
@@ -106,10 +255,10 @@
       const frame = document.createElement('iframe');
       frame.className = 'vulms-silent-sync-frame';
       frame.style.cssText = 'position:fixed !important; top:-9999px !important; left:-9999px !important; width:1px !important; height:1px !important; opacity:0 !important; pointer-events:none !important; border:none !important; visibility:hidden !important;';
-      frame.src = url;
 
       let resolved = false;
       let pollInterval = null;
+      let hasTriggeredClassicClick = false;
 
       const cleanup = () => {
         if (pollInterval) clearInterval(pollInterval);
@@ -127,37 +276,61 @@
         finish(null);
       }, maxWaitMs);
 
-      frame.onload = () => {
-        let attempts = 0;
-        pollInterval = setInterval(() => {
-          attempts++;
-          try {
-            const frameDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
-            if (frameDoc) {
+      const checkFrameContent = (attempts) => {
+        try {
+          const frameDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+          if (frameDoc) {
+            const currentHref = frame.contentWindow ? frame.contentWindow.location.href : '';
+            if (!currentHref || currentHref === 'about:blank') {
+              return false;
+            }
+
+            // Detect redirect to login screen (session expired)
+            if (currentHref.toLowerCase().includes('login.aspx') || currentHref.toLowerCase().includes('default.aspx')) {
+              console.warn('[VULMS Tracker] Silent frame was redirected to login page - session expired.');
+              clearTimeout(timeoutTimer);
+              finish(null);
+              return true;
+            }
+
+            if (frameDoc.body && frameDoc.body.children && frameDoc.body.children.length > 0) {
+              // 1. Try extracting activities directly
               const res = extractorFn(frameDoc);
-              if (res && ((Array.isArray(res) && res.length > 0) || (!Array.isArray(res) && res.vuEmail))) {
+              if (res && ((Array.isArray(res) && res.length > 0) || (!Array.isArray(res) && (res.vuEmail || res.studentId)))) {
                 clearTimeout(timeoutTimer);
                 finish(res);
-                return;
+                return true;
+              }
+
+              // 2. If table is not present yet, trigger "Classic To-Do" view inside iframe
+              if (!hasTriggeredClassicClick && attempts >= 2) {
+                const clicked = triggerClassicToDoInDoc(frameDoc);
+                if (clicked) {
+                  hasTriggeredClassicClick = true;
+                  console.log('[VULMS Tracker] Dispatched Classic To-Do postback in silent frame, waiting for table response...');
+                }
               }
             }
-          } catch (e) {
-            console.warn('[VULMS Tracker] Frame extraction check:', e.message);
           }
+        } catch (e) {
+          console.warn('[VULMS Tracker] Silent frame check error:', e);
+        }
+        return false;
+      };
 
-          if (attempts >= 20) { // 20 * 150ms = 3000ms after onload
+      let attempts = 0;
+      frame.onload = () => {
+        attempts = 0;
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(() => {
+          attempts++;
+          const found = checkFrameContent(attempts);
+          if (found) return;
+          if (attempts >= 48) { // 12 seconds maximum
             clearTimeout(timeoutTimer);
-            try {
-              const frameDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
-              if (frameDoc) {
-                const finalRes = extractorFn(frameDoc);
-                finish(finalRes);
-                return;
-              }
-            } catch (e) {}
             finish(null);
           }
-        }, 150);
+        }, 250);
       };
 
       frame.onerror = () => {
@@ -166,28 +339,70 @@
       };
 
       (document.body || document.documentElement).appendChild(frame);
+      frame.src = url;
     });
   }
 
   /**
    * Primary Orchestrator:
-   * As soon as student enters Home.aspx (or any VULMS page), fetch Profile & ActivityCalendar in background.
+   * Scrapes verified profile & captures academic activities from Home.aspx,
+   * course activity subpages, and ActivityCalendar endpoints.
    */
   async function syncAllVulmsData(isManual = false) {
-    if (isSyncInProgress) return { success: true, message: 'Sync already in progress...' };
+    if (isSyncInProgress) {
+      return { success: true, message: 'Sync already in progress...' };
+    }
+
+    // Guard: Verify authentication state
+    if (window.VulmsExtractor && !window.VulmsExtractor.isUserAuthenticated(document)) {
+      console.log('[VULMS Tracker] User is not authenticated. Halting data fetch.');
+      return { success: false, reason: 'unauthenticated', message: 'User is not logged in.' };
+    }
+
+    // Guard: Concurrency & Cache Freshness Protection
+    try {
+      const storageState = await new Promise((resolve) => {
+        chrome.storage.local.get(['lastSyncTime', 'cachedActivities', 'lastSyncStatus', 'studentId'], (res) => {
+          resolve(res || {});
+        });
+      });
+
+      const now = Date.now();
+      const lastSyncMs = storageState.lastSyncTime ? new Date(storageState.lastSyncTime).getTime() : 0;
+      const isCacheFresh = (now - lastSyncMs) < CACHE_TTL_MS;
+      const hasCachedActs = Array.isArray(storageState.cachedActivities) && storageState.cachedActivities.length > 0;
+
+      // If user is on Home.aspx and data was fetched within 5 minutes, avoid duplicate network fetch
+      if (!isManual && isCacheFresh && hasCachedActs && isVulmsHomepage()) {
+        console.log(`[VULMS Tracker] Cache is fresh (${Math.round((now - lastSyncMs)/1000)}s old). Skipping duplicate fetch on Home.aspx.`);
+        if (!hasShownConnectedToast) {
+          hasShownConnectedToast = true;
+          const sId = (storageState.studentId || 'VU').toUpperCase();
+          showToast(`Connected as ${sId}. ${storageState.cachedActivities.length} deadline${storageState.cachedActivities.length > 1 ? 's' : ''} tracked & ready.`, 'info');
+        }
+        return {
+          success: true,
+          count: storageState.cachedActivities.length,
+          fromCache: true,
+          message: `Cached ${storageState.cachedActivities.length} deadlines ready.`
+        };
+      }
+    } catch (cacheErr) {
+      console.warn('[VULMS Tracker] Cache check error:', cacheErr);
+    }
+
     isSyncInProgress = true;
 
     try {
-      console.log('[VULMS Tracker] Starting full background synchronization...');
+      console.log('[VULMS Tracker] Initiating academic deadline scan...');
 
       // ----------------------------------------------------
-      // STEP 1: Resolve Student ID, Name & Official VU Email
+      // STEP 1: Fast Profile Detection
       // ----------------------------------------------------
       let studentId = null;
       let studentName = null;
       let vuEmail = null;
 
-      // 1A. Inspect live DOM of current page
       if (window.VulmsExtractor) {
         const localProf = window.VulmsExtractor.extractStudentProfile(document);
         if (localProf) {
@@ -197,57 +412,25 @@
         }
       }
 
-      // 1B. If official email or name missing, fetch StudentProfile.aspx
-      if (!vuEmail || !studentName || vuEmail.includes('@vu.edu.pk') === false) {
-        // Fast direct fetch first
-        try {
-          const profRes = await fetch(PROFILE_URL, {
-            credentials: 'include',
-            headers: { 'Accept': 'text/html,application/xhtml+xml' },
-            cache: 'no-cache'
-          });
-          if (profRes.ok) {
-            const profHtml = await profRes.text();
-            const profDoc = new DOMParser().parseFromString(profHtml, 'text/html');
-            if (window.VulmsExtractor) {
-              const remoteProf = window.VulmsExtractor.extractStudentProfile(profDoc);
-              if (remoteProf.studentId && !studentId) studentId = remoteProf.studentId;
-              if (remoteProf.studentName) studentName = remoteProf.studentName;
-              if (remoteProf.vuEmail) vuEmail = remoteProf.vuEmail;
-            }
-          }
-        } catch (profErr) {
-          console.warn('[VULMS Tracker] Background Profile fetch failed, trying silent frame:', profErr);
-        }
-
-        // Silent in-page iframe fallback if direct fetch didn't obtain the official email
-        if (!vuEmail && !window.location.pathname.toLowerCase().includes('studentprofile')) {
-          try {
-            const iframeProf = await loadAndExtractFromIframe(
-              PROFILE_URL,
-              (doc) => window.VulmsExtractor ? window.VulmsExtractor.extractStudentProfile(doc) : null,
-              5000
-            );
-            if (iframeProf) {
-              if (iframeProf.studentId && !studentId) studentId = iframeProf.studentId;
-              if (iframeProf.studentName) studentName = iframeProf.studentName;
-              if (iframeProf.vuEmail) vuEmail = iframeProf.vuEmail;
-            }
-          } catch (e) {
-            console.warn('[VULMS Tracker] Silent profile iframe error:', e);
-          }
-        }
-      }
-
-      // 1C. Fallbacks
       if (!studentId && window.VulmsExtractor) {
         studentId = window.VulmsExtractor.extractStudentId(document);
       }
+
+      // If student ID is not detected from the live DOM, query storage rather than guessing
+      if (!studentId) {
+        const stored = await new Promise((res) => chrome.storage.local.get(['studentId', 'studentName', 'vuEmail'], res));
+        if (stored && stored.studentId) {
+          studentId = stored.studentId;
+          studentName = stored.studentName;
+          vuEmail = stored.vuEmail;
+        }
+      }
+
       studentId = (studentId || 'bc240424582').toLowerCase();
       studentName = studentName || 'Muhammad Abdullah';
       vuEmail = vuEmail || (studentId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${studentId}@vu.edu.pk`);
 
-      // Broadcast verified student profile to storage & backend
+      // Immediately notify background about student identity
       chrome.runtime.sendMessage({
         action: 'VULMS_STUDENT_DETECTED',
         data: {
@@ -260,93 +443,286 @@
         }
       });
 
-      // ----------------------------------------------------
-      // STEP 2: Resolve Deadlines from ActivityCalendar
-      // ----------------------------------------------------
-      let activities = [];
-
-      // 2A. If already on ActivityCalendar.aspx, extract directly from live DOM
-      if (window.location.pathname.toLowerCase().includes('activitycalendar') && window.VulmsExtractor) {
-        activities = window.VulmsExtractor.extractActivities(document, studentId);
+      // Background non-blocking check for official email if not yet resolved
+      if (!vuEmail || !vuEmail.includes('@vu.edu.pk')) {
+        fetchWithTimeout(`${BASE_URL}/Profile/StudentProfile.aspx`, { headers: { 'Accept': 'text/html' } }, 3000)
+          .then(res => (res && res.ok) ? res.text() : '')
+          .then(html => {
+            if (html && window.VulmsExtractor) {
+              const profDoc = new DOMParser().parseFromString(html, 'text/html');
+              const rProf = window.VulmsExtractor.extractStudentProfile(profDoc);
+              if (rProf && rProf.vuEmail && rProf.vuEmail.includes('@vu.edu.pk')) {
+                chrome.runtime.sendMessage({
+                  action: 'VULMS_STUDENT_DETECTED',
+                  data: {
+                    studentId: studentId,
+                    studentName: rProf.studentName || studentName,
+                    vuEmail: rProf.vuEmail,
+                    defaultEmail: rProf.vuEmail,
+                    timestamp: new Date().toISOString()
+                  }
+                });
+              }
+            }
+          }).catch(() => {});
       }
 
-      // 2B. If on Home.aspx (or any non-calendar page), attempt fast direct fetch first
+      // ----------------------------------------------------
+      // STEP 2: Multi-Angle Academic Activity Discovery
+      // ----------------------------------------------------
+      const activities = [];
+      const seenKeys = new Set();
+
+      function mergeActivities(newActs) {
+        if (!Array.isArray(newActs)) return;
+        for (const a of newActs) {
+          if (a && a.activity_key && !seenKeys.has(a.activity_key)) {
+            seenKeys.add(a.activity_key);
+            activities.push(a);
+          }
+        }
+      }
+
+      // ANGLE A: Scrape live DOM of current page (Home.aspx or ActivityCalendar.aspx)
+      if (window.VulmsExtractor) {
+        const liveActs = window.VulmsExtractor.extractActivities(document, studentId);
+        mergeActivities(liveActs);
+      }
+
+      // ANGLE B: Inspect any child frames on the page
+      try {
+        const childFrames = document.querySelectorAll('iframe, frame');
+        for (const frame of childFrames) {
+          try {
+            const fDoc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+            if (fDoc && window.VulmsExtractor) {
+              const fActs = window.VulmsExtractor.extractActivities(fDoc, studentId);
+              mergeActivities(fActs);
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+
+      // ANGLE C: Direct Fast Fetch for ActivityCalendar and JSON endpoints
       if (activities.length === 0) {
+        const directEndpoints = [
+          `${BASE_URL}/ActivityCalendar/ActivityCalendar.aspx`,
+          `${BASE_URL}/ActivityCalendar.aspx`,
+          `${BASE_URL}/Quiz/StudentQuiz.aspx`,
+          `${BASE_URL}/Assignment/StudentAssignment.aspx`
+        ];
+
+        for (const u of directEndpoints) {
+          if (activities.length > 0) break;
+          try {
+            const res = await fetchWithTimeout(u, {
+              headers: { 'Accept': 'text/html,application/xhtml+xml,application/json,*/*' },
+              cache: 'no-cache'
+            }, 2500);
+
+            if (res && res.ok) {
+              const text = await res.text();
+              if (window.VulmsExtractor) {
+                const acts = window.VulmsExtractor.extractActivitiesFromHtml(text, studentId);
+                if (acts && acts.length > 0) {
+                  mergeActivities(acts);
+                  break;
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // ANGLE D: Silent In-Page Frame Extraction with Automatic "Classic To-Do" Trigger
+      // Renders ActivityCalendar.aspx in an invisible 1px frame and triggers the Classic To-Do view.
+      if (activities.length === 0 && !isVulmsClassicToDoPage()) {
+        const silentUrls = [
+          `${BASE_URL}/ActivityCalendar/ActivityCalendar.aspx`,
+          `${BASE_URL}/ActivityCalendar.aspx`
+        ];
+
+        // Scan dashboard links for explicit calendar endpoints
         try {
-          const calRes = await fetch(CALENDAR_URL, {
-            credentials: 'include',
-            headers: { 'Accept': 'text/html,application/xhtml+xml' },
-            cache: 'no-cache'
-          });
-          if (calRes.ok) {
-            const calHtml = await calRes.text();
-            const calDoc = new DOMParser().parseFromString(calHtml, 'text/html');
-            if (window.VulmsExtractor) {
-              activities = window.VulmsExtractor.extractActivities(calDoc, studentId);
+          const allLinks = document.querySelectorAll('a[href], a[onclick]');
+          for (const el of allLinks) {
+            const raw = (el.getAttribute('href') || '') + ' ' + (el.getAttribute('onclick') || '');
+            const match = raw.match(/(?:['"])([^'"]*(?:StudentQuiz|Quiz|StudentAssignment|Assignment|ActivityCalendar)[^'"]*\.aspx[^'"]*)(?:['"])/i);
+            if (match && match[1]) {
+              try {
+                const resolved = new URL(match[1], BASE_URL).href;
+                if (!silentUrls.includes(resolved)) {
+                  silentUrls.unshift(resolved);
+                }
+              } catch (e) {}
             }
           }
-        } catch (calErr) {
-          console.warn('[VULMS Tracker] Background ActivityCalendar fetch failed:', calErr);
-        }
-      }
+        } catch (e) {}
 
-      // 2C. If direct fetch yielded 0 activities and user is on Home.aspx,
-      // load via invisible in-page iframe (0 extra tabs, full ASP.NET rendering)
-      if (activities.length === 0 && !window.location.pathname.toLowerCase().includes('activitycalendar')) {
-        try {
-          console.log('[VULMS Tracker] Extracting ActivityCalendar via invisible in-page frame...');
-          const iframeActivities = await loadAndExtractFromIframe(
-            CALENDAR_URL,
-            (doc) => window.VulmsExtractor ? window.VulmsExtractor.extractActivities(doc, studentId) : [],
-            6000
-          );
-          if (iframeActivities && Array.isArray(iframeActivities) && iframeActivities.length > 0) {
-            activities = iframeActivities;
+        for (const sUrl of silentUrls) {
+          if (activities.length > 0) break;
+          try {
+            console.log(`[VULMS Tracker] Rendering ${sUrl} via silent frame with Classic To-Do trigger...`);
+            const iframeActs = await loadAndExtractFromIframe(
+              sUrl,
+              (fDoc) => window.VulmsExtractor ? window.VulmsExtractor.extractActivities(fDoc, studentId) : [],
+              15000
+            );
+            if (iframeActs && Array.isArray(iframeActs) && iframeActs.length > 0) {
+              mergeActivities(iframeActs);
+              break;
+            }
+          } catch (frameErr) {
+            console.warn('[VULMS Tracker] Silent iframe error:', frameErr);
           }
-        } catch (calFrameErr) {
-          console.warn('[VULMS Tracker] Silent calendar iframe error:', calFrameErr);
         }
       }
 
-      console.log(`[VULMS Tracker] Scan result: studentId=${studentId}, vuEmail=${vuEmail}, found ${activities.length} activities.`);
+      console.log(`[VULMS Tracker] Total detected activities: ${activities.length}`);
 
       // ----------------------------------------------------
-      // STEP 3: Dispatch to Google Apps Script Backend
+      // STEP 3: Dispatch & Feedback
       // ----------------------------------------------------
       if (activities.length > 0) {
         hasSyncedOnce = true;
+        stopDomObserver();
+
+        let response = null;
+        try {
+          response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+              action: 'VULMS_ACTIVITIES_EXTRACTED',
+              data: {
+                studentId: studentId,
+                studentName: studentName,
+                vuEmail: vuEmail,
+                studentEmail: vuEmail,
+                activities: activities,
+                pageUrl: window.location.href,
+                timestamp: new Date().toISOString()
+              }
+            }, (res) => {
+              if (chrome.runtime.lastError) {
+                console.warn('[VULMS Content] Message error:', chrome.runtime.lastError.message);
+                resolve({ success: false, error: chrome.runtime.lastError.message });
+              } else {
+                resolve(res || { success: false, error: 'No response from background worker' });
+              }
+            });
+          });
+        } catch (e) {
+          response = { success: false, error: e.message };
+        }
+
+        if (response && response.reason === 'unconfigured') {
+          showToast(`Found ${activities.length} activity deadline${activities.length > 1 ? 's' : ''}! Open extension popup to link Google Sheets.`, 'info');
+          return {
+            success: true,
+            unconfigured: true,
+            count: activities.length,
+            message: `Found ${activities.length} activity deadline${activities.length > 1 ? 's' : ''}! Open extension popup to link Google Sheets.`
+          };
+        } else if (response && response.success) {
+          showToast(`Synced ${activities.length} activity deadline${activities.length > 1 ? 's' : ''} to Google Sheets!`, 'success');
+          return {
+            success: true,
+            count: activities.length,
+            message: `✅ Synced ${activities.length} activity deadline${activities.length > 1 ? 's' : ''} to Google Sheets!`
+          };
+        } else {
+          const errMsg = (response && response.error) ? response.error : 'Failed to connect to Google Sheets.';
+          showToast(`⚠️ Found ${activities.length} deadlines, but Sheet sync failed: ${errMsg}`, 'error');
+          return {
+            success: false,
+            count: activities.length,
+            error: errMsg,
+            message: `⚠️ Found ${activities.length} deadlines, but Sheet sync failed: ${errMsg}`
+          };
+        }
+      } else {
+        // Broadcast scan completion even when 0 activities are found
         chrome.runtime.sendMessage({
-          action: 'VULMS_ACTIVITIES_EXTRACTED',
+          action: 'VULMS_PAGE_SCANNED',
           data: {
             studentId: studentId,
             studentName: studentName,
-            vuEmail: vuEmail,
-            studentEmail: vuEmail,
-            activities: activities,
-            pageUrl: window.location.href,
+            count: 0,
             timestamp: new Date().toISOString()
           }
-        }, (response) => {
-          showToast(`Synced ${activities.length} activity deadline${activities.length > 1 ? 's' : ''} to Google Sheets!`, 'success');
         });
+
+        if (isManual) {
+          showToast(`Student ID ${studentId} verified. No pending activities right now on VULMS.`, 'info');
+        } else if (!hasShownConnectedToast) {
+          hasShownConnectedToast = true;
+          showToast(`Connected as ${studentId.toUpperCase()}. VULMS courses active & up to date.`, 'info');
+        }
+        stopDomObserver();
+
         return {
           success: true,
-          count: activities.length,
-          message: `✅ Synced ${activities.length} activity deadline${activities.length > 1 ? 's' : ''} to Google Sheets!`
-        };
-      } else {
-        if (isManual) {
-          showToast(`Student ID ${studentId} verified. No pending activities right now.`, 'info');
-        }
-        return {
-          success: false,
-          message: `Student ID ${studentId} verified. No pending activities found.`
+          count: 0,
+          message: `Student ID ${studentId} verified. No pending activities at this moment.`
         };
       }
 
     } finally {
       isSyncInProgress = false;
     }
+  }
+
+  /**
+   * Bounded readiness checker:
+   * Verifies authentication state after login / page load and triggers automatic fetch
+   */
+  function checkAuthAndInit(isManual = false) {
+    const path = (window.location.pathname || '').toLowerCase();
+
+    // Never trigger fetching on login or logout pages
+    if (path.includes('login.aspx') || path.includes('logout.aspx')) {
+      console.log('[VULMS Tracker] On Login/Logout page - awaiting authentication.');
+      return;
+    }
+
+    if (!window.VulmsExtractor) {
+      setTimeout(() => checkAuthAndInit(isManual), 200);
+      return;
+    }
+
+    const isAuth = window.VulmsExtractor.isUserAuthenticated(document);
+    if (!isAuth) {
+      if (authReadinessAttempts < MAX_AUTH_READINESS_ATTEMPTS) {
+        authReadinessAttempts++;
+        authReadinessTimeout = setTimeout(() => checkAuthAndInit(isManual), AUTH_CHECK_INTERVAL_MS);
+      } else {
+        console.log('[VULMS Tracker] Authentication not detected on current page.');
+      }
+      return;
+    }
+
+    // Authenticated state confirmed
+    if (authReadinessTimeout) {
+      clearTimeout(authReadinessTimeout);
+      authReadinessTimeout = null;
+    }
+
+    // Automatically initiate fetching of the To-Do Calendar data
+    syncAllVulmsData(isManual);
+  }
+
+  /**
+   * Classic To-Do Page Enhancement:
+   * When user opens Classic To-Do, display cached data immediately if available
+   */
+  function handleClassicToDoPageView() {
+    if (!isVulmsClassicToDoPage()) return;
+
+    chrome.storage.local.get(['cachedActivities', 'lastSyncTime'], (store) => {
+      const acts = store.cachedActivities || [];
+      if (acts.length > 0) {
+        console.log(`[VULMS Tracker] Classic To-Do opened: ${acts.length} cached activities available.`);
+      }
+    });
   }
 
   // Listen for messages from background worker or popup
@@ -358,13 +734,20 @@
       return true;
     }
 
+    if (message.action === 'VULMS_HOMEPAGE_NAVIGATED') {
+      authReadinessAttempts = 0;
+      checkAuthAndInit(false);
+      sendResponse({ success: true });
+      return true;
+    }
+
     if (message.action === 'TRIGGER_MANUAL_SYNC') {
       syncAllVulmsData(true).then((res) => {
         sendResponse(res || { success: true, message: '✅ Synced live from VULMS!' });
       }).catch((err) => {
         sendResponse({ success: false, message: 'Sync error: ' + err.message });
       });
-      return true; // Keep message channel open for async response
+      return true;
     }
 
     if (message.action === 'GET_PAGE_STATUS') {
@@ -378,20 +761,26 @@
     }
   });
 
-  // Automatically start sync as soon as DOM loads on Home.aspx or any VULMS page
+  // Client-side route and navigation listeners
+  window.addEventListener('popstate', () => {
+    authReadinessAttempts = 0;
+    checkAuthAndInit(false);
+  });
+
+  window.addEventListener('hashchange', () => {
+    authReadinessAttempts = 0;
+    checkAuthAndInit(false);
+  });
+
+  // Automatic Lifecycle Trigger on Page Load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      syncAllVulmsData(false);
+      checkAuthAndInit(false);
+      handleClassicToDoPageView();
     });
   } else {
-    syncAllVulmsData(false);
+    checkAuthAndInit(false);
+    handleClassicToDoPageView();
   }
-
-  // Backup trigger after 1.5 seconds in case session was still initializing
-  setTimeout(() => {
-    if (!hasSyncedOnce) {
-      syncAllVulmsData(false);
-    }
-  }, 1500);
 
 })();

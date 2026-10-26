@@ -27,6 +27,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const valPendingReminders = document.getElementById('valPendingReminders');
   const valSyncedCount = document.getElementById('valSyncedCount');
 
+  // Backend URL Card
+  const inputWebAppUrl = document.getElementById('inputWebAppUrl');
+  const btnSaveWebAppUrl = document.getElementById('btnSaveWebAppUrl');
+  const backendStatusPill = document.getElementById('backendStatusPill');
+
   // Email Card
   const inputPersonalEmail = document.getElementById('inputPersonalEmail');
   const btnSaveEmail = document.getElementById('btnSaveEmail');
@@ -149,6 +154,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
 
+      // Backend URL Input & Status Pill
+      if (inputWebAppUrl) {
+        inputWebAppUrl.value = store.webAppUrl || '';
+      }
+      if (backendStatusPill) {
+        if (store.webAppUrl) {
+          backendStatusPill.textContent = 'Connected';
+          backendStatusPill.style.background = 'rgba(16, 185, 129, 0.15)';
+          backendStatusPill.style.color = '#34d399';
+        } else {
+          backendStatusPill.textContent = 'Paste URL';
+          backendStatusPill.style.background = 'rgba(245, 158, 11, 0.15)';
+          backendStatusPill.style.color = '#fbbf24';
+        }
+      }
+
       // Status Badge
       if (statusBadge && statusText) {
         if (!store.webAppUrl) {
@@ -156,13 +177,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusBadge.style.borderColor = 'rgba(245, 158, 11, 0.35)';
           statusBadge.style.color = '#fbbf24';
           statusText.textContent = 'Setup Needed';
-          statusBadge.title = 'Click to configure Apps Script Web App URL';
+          statusBadge.title = 'Configure Apps Script Web App URL below';
         } else {
           statusBadge.style.background = 'rgba(16, 185, 129, 0.15)';
           statusBadge.style.borderColor = 'rgba(16, 185, 129, 0.35)';
           statusBadge.style.color = '#34d399';
           statusText.textContent = 'Connected';
-          statusBadge.title = 'Backend Connected (Click to change URL)';
+          statusBadge.title = 'Backend Connected';
         }
       }
 
@@ -251,6 +272,45 @@ document.addEventListener('DOMContentLoaded', async () => {
         showBanner(cleanUrl ? '✅ Backend URL updated!' : '⚠️ Backend URL cleared.', true);
         await renderDashboard();
       }
+    });
+  }
+
+  // Save Backend Web App URL Button
+  if (btnSaveWebAppUrl && inputWebAppUrl) {
+    btnSaveWebAppUrl.addEventListener('click', async () => {
+      const url = inputWebAppUrl.value.trim();
+      if (!url) {
+        await chrome.storage.local.set({ webAppUrl: '' });
+        showBanner('⚠️ Backend URL cleared.', true);
+        await renderDashboard();
+        return;
+      }
+
+      if (!url.startsWith('https://script.google.com/macros/s/')) {
+        showBanner('Please enter a valid Apps Script URL (starts with https://script.google.com/macros/s/)', false);
+        return;
+      }
+
+      btnSaveWebAppUrl.disabled = true;
+      btnSaveWebAppUrl.textContent = 'Connecting...';
+
+      chrome.runtime.sendMessage({
+        action: 'TEST_CONNECTION',
+        webAppUrl: url
+      }, async (res) => {
+        btnSaveWebAppUrl.disabled = false;
+        btnSaveWebAppUrl.textContent = 'Connect';
+
+        if (res && res.success) {
+          await chrome.storage.local.set({ webAppUrl: url, lastSyncStatus: 'success' });
+          showBanner('✅ Google Sheet Connected! All systems active.', true);
+          chrome.runtime.sendMessage({ action: 'TRIGGER_RESYNC_ACTIVE_TAB' });
+        } else {
+          await chrome.storage.local.set({ webAppUrl: url });
+          showBanner('⚠️ URL saved. Please ensure Apps Script is deployed to Anyone.', false);
+        }
+        await renderDashboard();
+      });
     });
   }
 

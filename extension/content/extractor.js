@@ -725,20 +725,20 @@
           if (colType === 'course') courseText = content;
           else if (colType === 'title') {
             titleText = content;
-            const a = cell.querySelector('a');
+            const a = cell.querySelector ? cell.querySelector('a') : null;
             if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
           } else if (colType === 'type') typeText = content;
           else if (colType === 'end_date') endDateText = content;
           else if (colType === 'start_date') startDateText = content;
           else if (colType === 'action') {
-            const a = cell.querySelector('a');
+            const a = cell.querySelector ? cell.querySelector('a') : null;
             if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
           } else {
             // Positional heuristic if headers are missing
             if (idx === 0 && !courseText) courseText = content;
             else if (idx === 1 && !titleText) {
               titleText = content;
-              const a = cell.querySelector('a');
+              const a = cell.querySelector ? cell.querySelector('a') : null;
               if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
             } else {
               const norm = normalizeDate(content);
@@ -834,34 +834,149 @@
     }
 
     // ==========================================
+    // Strategy 2.5: FullCalendar Events Scraper
+    // ==========================================
+    const fcEventSelectors = [
+      '.fc-event',
+      'a.fc-event',
+      '.fc-daygrid-event',
+      '.fc-timegrid-event',
+      '.fc-list-event',
+      '.fc-event-main',
+      '[class*="fc-event" i]'
+    ];
+
+    for (const sel of fcEventSelectors) {
+      const fcEvents = doc.querySelectorAll ? doc.querySelectorAll(sel) : [];
+      for (const el of fcEvents) {
+        const text = (el.textContent || '').trim();
+        const tooltip = (el.getAttribute ? (el.getAttribute('title') || el.getAttribute('data-original-title') || el.getAttribute('aria-label') || '') : '').trim();
+        const combined = (tooltip ? tooltip + ' ' : '') + text;
+        if (!combined) continue;
+
+        // Try date from closest parent cell with data-date attribute
+        let dateFound = null;
+        let curr = el;
+        for (let depth = 0; depth < 5 && curr; depth++) {
+          if (curr.getAttribute) {
+            const dDate = curr.getAttribute('data-date') || curr.getAttribute('data-start');
+            if (dDate) {
+              const nd = normalizeDate(dDate);
+              if (nd) { dateFound = nd; break; }
+            }
+          }
+          curr = curr.parentElement;
+        }
+
+        if (!dateFound) {
+          dateFound = normalizeDate(tooltip) || normalizeDate(text);
+        }
+
+        if (dateFound && text) {
+          const parsedCourse = parseCourse(combined);
+          const actType = inferActivityType(combined);
+          const linkEl = el.tagName === 'A' ? el : (el.querySelector ? el.querySelector('a') : null);
+          const linkUrl = (linkEl && linkEl.href && !linkEl.href.startsWith('javascript:')) ? linkEl.href : '';
+          const actId = extractActivityIdFromUrl(linkUrl);
+
+          const titleClean = text.replace(/^\d{1,2}:\d{2}\s*(?:AM|PM)?\s*/i, '').trim() || text;
+
+          addActivity({
+            course_code: parsedCourse.code,
+            course_name: parsedCourse.name,
+            activity_title: titleClean,
+            activity_type: actType,
+            start_date: dateFound,
+            end_date: dateFound,
+            activity_url: linkUrl,
+            vulms_activity_id: actId
+          });
+        }
+      }
+    }
+
+    // ==========================================
+    // Strategy 2.8: Course Dashboard Cards Scraper (Home.aspx)
+    // ==========================================
+    const courseContainerSelectors = [
+      '#tblCourses tr',
+      '#ctl00_MainContent_tblCourses tr',
+      '#ctl00_MainContent_gvCourses tr',
+      '.course-box',
+      '.courseBox',
+      '.dashboard-course',
+      'div[id*="Course" i]',
+      'div[class*="course-box" i]'
+    ];
+
+    for (const sel of courseContainerSelectors) {
+      const courseNodes = doc.querySelectorAll ? doc.querySelectorAll(sel) : [];
+      for (const node of courseNodes) {
+        const nodeText = (node.textContent || '').trim();
+        const parsedCourse = parseCourse(nodeText);
+        if (!parsedCourse || !parsedCourse.code || parsedCourse.code === 'VU_COURSE' || parsedCourse.code.startsWith('EXAM')) {
+          continue;
+        }
+
+        const actLinks = node.querySelectorAll ? node.querySelectorAll('a[href*="Assignment" i], a[href*="Quiz" i], a[href*="GDB" i], a[href*="Activity" i], [class*="activity" i], [class*="deadline" i]') : [];
+        for (const link of actLinks) {
+          const linkText = (link.textContent || '').trim();
+          const linkHref = (link.href && !link.href.startsWith('javascript:')) ? link.href : '';
+          const parentContext = (link.parentElement ? link.parentElement.textContent : '') + ' ' + (link.closest ? (link.closest('tr, div') ? link.closest('tr, div').textContent : '') : '');
+          
+          const fullText = linkText + ' ' + parentContext;
+          const foundDate = normalizeDate(linkText) || normalizeDate(parentContext);
+          
+          if (foundDate) {
+            const actType = inferActivityType(linkHref + ' ' + linkText + ' ' + fullText);
+            const actTitle = (linkText.length > 3 && !linkText.toLowerCase().includes('click here')) ? linkText : `${parsedCourse.code} ${actType}`;
+            const actId = extractActivityIdFromUrl(linkHref);
+
+            addActivity({
+              course_code: parsedCourse.code,
+              course_name: parsedCourse.name,
+              activity_title: actTitle,
+              activity_type: actType,
+              start_date: foundDate,
+              end_date: foundDate,
+              activity_url: linkHref,
+              vulms_activity_id: actId
+            });
+          }
+        }
+      }
+    }
+
+    // ==========================================
     // Strategy 3: Generalized Table Fallback
     // ==========================================
     if (activities.length === 0) {
-      const allTables = doc.querySelectorAll('table');
+      const allTables = doc.querySelectorAll ? doc.querySelectorAll('table') : [];
       for (const table of allTables) {
         if (isGradingOrNonActivityTable(table)) continue;
 
-        const text = table.textContent.toLowerCase();
-        if (text.includes('assignment') || text.includes('quiz') || text.includes('gdb')) {
-          const rows = table.querySelectorAll('tr');
+        const text = (table.textContent || '').toLowerCase();
+        if (text.includes('assignment') || text.includes('quiz') || text.includes('gdb') || text.includes('activity')) {
+          const rows = table.querySelectorAll ? table.querySelectorAll('tr') : [];
           for (let r = 1; r < rows.length; r++) {
-            const rowText = rows[r].textContent;
+            const rowText = rows[r].textContent || '';
             const dates = [];
-            rows[r].querySelectorAll('td').forEach(td => {
+            const cells = rows[r].querySelectorAll ? rows[r].querySelectorAll('td') : [];
+            cells.forEach(td => {
               const d = normalizeDate(td.textContent);
               if (d) dates.push(d);
             });
 
             if (dates.length > 0) {
-              const link = rows[r].querySelector('a');
-              const linkUrl = (link && !link.href.startsWith('javascript:')) ? link.href : '';
-              const title = link ? link.textContent.trim() : (rows[r].querySelector('td:nth-child(2)') || rows[r].querySelector('td')).textContent.trim();
+              const link = rows[r].querySelector ? rows[r].querySelector('a') : null;
+              const linkUrl = (link && link.href && !link.href.startsWith('javascript:')) ? link.href : '';
+              const title = link ? link.textContent.trim() : (rows[r].querySelector ? (rows[r].querySelector('td:nth-child(2)') || rows[r].querySelector('td')).textContent.trim() : '');
               const parsedCourse = parseCourse(rowText);
 
               addActivity({
                 course_code: parsedCourse.code,
                 course_name: parsedCourse.name,
-                activity_title: title,
+                activity_title: title || `${parsedCourse.code} Activity`,
                 activity_type: inferActivityType(title + ' ' + rowText),
                 start_date: dates[0],
                 end_date: dates[dates.length - 1],
@@ -877,6 +992,310 @@
     return activities;
   }
 
+  /**
+   * Extracts activities from parsed JSON structure or string
+   * Handles FullCalendar JSON feeds, ASP.NET WebMethod responses ({ "d": [...] }),
+   * and custom VULMS API responses.
+   */
+  function extractActivitiesFromJson(jsonInput, studentId) {
+    if (!jsonInput) return [];
+
+    let parsed = jsonInput;
+    if (typeof jsonInput === 'string') {
+      try {
+        parsed = JSON.parse(jsonInput);
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Unwrap common ASP.NET AJAX wrapper { "d": [...] }
+    if (parsed && parsed.d) {
+      parsed = parsed.d;
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch (e) {}
+      }
+    }
+
+    // Unwrap object properties if data is in a sub-property
+    if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+      if (Array.isArray(parsed.events)) parsed = parsed.events;
+      else if (Array.isArray(parsed.activities)) parsed = parsed.activities;
+      else if (Array.isArray(parsed.data)) parsed = parsed.data;
+      else if (Array.isArray(parsed.items)) parsed = parsed.items;
+      else if (Array.isArray(parsed.rows)) parsed = parsed.rows;
+    }
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const activities = [];
+    const seenKeys = new Set();
+
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+
+      const rawTitle = (item.title || item.ActivityTitle || item.activity_title || item.name || item.text || item.ActivityName || item.subject || '').trim();
+      const rawCourse = (item.course || item.CourseCode || item.course_code || item.Course || '').trim();
+      const rawType = (item.activity || item.ActivityType || item.activity_type || item.type || '').trim();
+      
+      const rawEnd = (item.end || item.due || item.EndDate || item.DueDate || item.due_date || item.end_date || item.close_date || item.CloseDate || '').trim();
+      const rawStart = (item.start || item.StartDate || item.start_date || item.open_date || item.OpenDate || rawEnd || '').trim();
+      
+      const rawUrl = (item.url || item.ActivityUrl || item.activity_url || item.link || '').trim();
+      const rawId = String(item.id || item.ActivityId || item.activity_id || item.vulms_activity_id || '').trim();
+
+      const normalizedEnd = normalizeDate(rawEnd);
+      const normalizedStart = normalizeDate(rawStart) || normalizedEnd;
+
+      if (rawTitle && normalizedEnd) {
+        const parsedCourse = parseCourse(rawCourse || rawTitle);
+        const actType = rawType ? inferActivityType(rawType) : inferActivityType(rawTitle);
+        const actId = (rawId && !/^[A-Za-z]{2,4}\d{3}[A-Za-z]?$/i.test(rawId)) ? rawId : extractActivityIdFromUrl(rawUrl);
+
+        let resolvedCourseName = parsedCourse.name;
+        if (!resolvedCourseName || resolvedCourseName === parsedCourse.code) {
+          resolvedCourseName = VU_COURSE_CATALOG[parsedCourse.code] || parsedCourse.code;
+        }
+
+        const key = generateActivityKey(studentId, parsedCourse.code, actType, rawTitle, actId);
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          activities.push({
+            student_id: studentId || 'unassigned',
+            activity_key: key,
+            vulms_activity_id: actId,
+            course_code: parsedCourse.code || 'VU_COURSE',
+            course_name: resolvedCourseName,
+            activity_title: rawTitle,
+            activity_type: actType,
+            start_date: normalizedStart,
+            end_date: normalizedEnd,
+            activity_url: rawUrl,
+            extracted_at: new Date().toISOString()
+          });
+        }
+      }
+    }
+
+    return activities;
+  }
+
+  /**
+   * Extracts activities from raw HTML string using DOMParser, JSON parsing, and regex
+   */
+  function extractActivitiesFromHtml(htmlString, studentId) {
+    if (!htmlString || typeof htmlString !== 'string') return [];
+
+    // 0. If raw string is JSON (starts with [ or {)
+    if (/^\s*[\[\{]/.test(htmlString)) {
+      try {
+        const jsonActs = extractActivitiesFromJson(htmlString, studentId);
+        if (jsonActs && jsonActs.length > 0) return jsonActs;
+      } catch (e) {}
+    }
+
+    // Check for embedded JSON events in <script> tags
+    const scriptJsonMatch = htmlString.match(/events\s*:\s*(\[\s*\{[\s\S]*?\}\s*\])/i) ||
+                            htmlString.match(/var\s+(?:events|calendarEvents|activities)\s*=\s*(\[\s*\{[\s\S]*?\}\s*\])/i);
+    if (scriptJsonMatch) {
+      try {
+        const jsonActs = extractActivitiesFromJson(scriptJsonMatch[1], studentId);
+        if (jsonActs && jsonActs.length > 0) return jsonActs;
+      } catch (e) {}
+    }
+
+    // 1. Try DOMParser if available
+    if (typeof DOMParser !== 'undefined') {
+      try {
+        const doc = new DOMParser().parseFromString(htmlString, 'text/html');
+        const acts = extractActivities(doc, studentId);
+        if (acts && acts.length > 0) return acts;
+      } catch (e) {}
+    }
+
+    // 2. Direct HTML table row regex parsing fallback
+    const activities = [];
+    const seen = new Set();
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let trMatch;
+
+    while ((trMatch = trRegex.exec(htmlString)) !== null) {
+      const row = trMatch[1];
+      const tdRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+      const cells = [];
+      let tdMatch;
+      while ((tdMatch = tdRegex.exec(row)) !== null) {
+        const text = tdMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        cells.push(text);
+      }
+
+      if (cells.length >= 3) {
+        let endDate = null;
+        let startDate = null;
+        let courseCode = '';
+        let courseName = '';
+        let title = '';
+
+        for (const c of cells) {
+          const nd = normalizeDate(c);
+          if (nd) {
+            if (!endDate) endDate = nd;
+            else if (!startDate) {
+              startDate = endDate;
+              endDate = nd;
+            }
+          }
+          const parsedC = parseCourse(c);
+          if (parsedC && parsedC.code && !parsedC.code.includes('EXAM') && parsedC.code !== 'VU_COURSE') {
+            if (!courseCode) {
+              courseCode = parsedC.code;
+              courseName = parsedC.name;
+            }
+          }
+        }
+
+        // Title candidate
+        if (cells[1] && !normalizeDate(cells[1]) && !parseCourse(cells[1]).code.startsWith('CS')) {
+          title = cells[1];
+        } else if (cells[0] && !normalizeDate(cells[0])) {
+          title = cells[0];
+        }
+
+        if (title && endDate) {
+          const actKey = generateActivityKey(studentId, courseCode || 'VU_COURSE', 'Quiz', title, '');
+          if (!seen.has(actKey)) {
+            seen.add(actKey);
+            activities.push({
+              student_id: studentId || 'unassigned',
+              activity_key: actKey,
+              vulms_activity_id: '',
+              course_code: courseCode || 'VU_COURSE',
+              course_name: courseName || VU_COURSE_CATALOG[courseCode] || courseCode,
+              activity_title: title,
+              activity_type: inferActivityType(title),
+              start_date: startDate || endDate,
+              end_date: endDate,
+              activity_url: '',
+              extracted_at: new Date().toISOString()
+            });
+          }
+        }
+      }
+    }
+
+    return activities;
+  }
+
+  /**
+   * Determines whether the current document or page represents an authenticated VULMS session.
+   * Accurately rejects unauthenticated login screens (e.g., Login.aspx, presence of login form fields),
+   * and verifies authenticated state via student ID elements, profile panels, or logout controls.
+   */
+  function isUserAuthenticated(doc) {
+    if (!doc) return false;
+
+    try {
+      if (doc.querySelector) {
+        const hasLoginForm = doc.querySelector('#txtStudentID, #txtPassword, #btnLogin, input[type="password"]');
+        const hasLogout = doc.querySelector('#lnkLogout, #ctl00_lnkLogout, a[href*="logout" i], a[href*="Logout.aspx" i]');
+        const hasStudentProfile = doc.querySelector('#lblStudentId, #ctl00_lblStudentId, #lblStudentID, .student-id, .user-profile, #loginUserName');
+
+        // If login inputs are present and NO logout/studentId element is present, user is NOT authenticated
+        if (hasLoginForm && !hasLogout && !hasStudentProfile) {
+          return false;
+        }
+
+        // If explicit logout element is present, user is authenticated
+        if (hasLogout) {
+          return true;
+        }
+
+        // If student ID is present and matches standard VU student ID pattern
+        const sId = extractStudentId(doc);
+        if (sId && /^[a-zA-Z]{2}\d{7,9}$/i.test(sId)) {
+          return true;
+        }
+      }
+
+      // Fallback text scan for logout or student id pattern
+      if (doc.body) {
+        const bodyTxt = (doc.body.innerText || doc.body.textContent || '');
+        if (/\blogout\b/i.test(bodyTxt) && /\b([a-zA-Z]{2}\d{7,9})\b/i.test(bodyTxt)) {
+          return true;
+        }
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
+  /**
+   * Searches the document for the "Classic To-Do" button, link, tab, or control.
+   * Handles various ASP.NET WebForms and dynamic DOM identifiers:
+   * - Specific IDs: #btnClassic, #ctl00_MainContent_btnClassic, #btnClassicToDo, etc.
+   * - Attribute selectors matching 'classic' in ID, class, href, or name
+   * - Text content matching "Classic To-Do", "Classic View", "Classic List", or "Classic"
+   */
+  function findClassicToDoElement(doc) {
+    if (!doc) return null;
+
+    try {
+      // 1. Direct IDs
+      const specificIds = [
+        '#tabHClassic',
+        '#ctl00_MainContent_tabHClassic',
+        '#btnClassic',
+        '#ctl00_MainContent_btnClassic',
+        '#btnClassicToDo',
+        '#ctl00_MainContent_btnClassicToDo',
+        '#lnkClassic',
+        '#ctl00_MainContent_lnkClassic',
+        '#lnkClassicToDo',
+        '#ctl00_MainContent_lnkClassicToDo',
+        '#btnClassicView',
+        '#ctl00_MainContent_btnClassicView',
+        '#tabClassic',
+        '#ctl00_MainContent_tabClassic'
+      ];
+
+      for (const sel of specificIds) {
+        const el = doc.querySelector ? doc.querySelector(sel) : null;
+        if (el) return el;
+      }
+
+      // 2. Attribute selectors
+      const attrSelectors = [
+        'a[id*="classic" i]',
+        'button[id*="classic" i]',
+        'input[id*="classic" i]',
+        'a[href*="classic" i]',
+        'a[onclick*="classic" i]',
+        'input[name*="classic" i]',
+        '[class*="classic" i]'
+      ];
+
+      for (const sel of attrSelectors) {
+        const el = doc.querySelector ? doc.querySelector(sel) : null;
+        if (el) return el;
+      }
+
+      // 3. Search all clickable candidates by text content or input value
+      if (doc.querySelectorAll) {
+        const candidates = doc.querySelectorAll('a, button, input[type="button"], input[type="submit"], [role="tab"], .btn, .tab, span, div, li');
+        for (const el of candidates) {
+          const text = (el.textContent || el.value || el.innerText || '').trim();
+          if (/classic\s*(?:to-?do|view|list)?/i.test(text)) {
+            return el;
+          }
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
   return {
     normalizeDate,
     inferActivityType,
@@ -888,6 +1307,11 @@
     extractOfficialVuEmail,
     isValidPersonName,
     extractActivities,
-    hashString
+    extractActivitiesFromJson,
+    extractActivitiesFromHtml,
+    hashString,
+    isUserAuthenticated,
+    findClassicToDoElement
   };
 });
+

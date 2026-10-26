@@ -21,7 +21,10 @@
     "storage",
     "alarms",
     "cookies",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "tabs",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "*://*.vu.edu.pk/*",
