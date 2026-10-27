@@ -14,16 +14,16 @@
     <!-- Top Bar: Avatar, Verified Student Name, Student ID -->
     <header class="top-nav">
       <div class="user-block">
-        <div class="avatar-ring" id="userAvatar">MA</div>
+        <div class="avatar-ring" id="userAvatar">VU</div>
         <div class="user-meta">
           <div class="user-name-row">
-            <span class="user-name" id="lblStudentName">Muhammad Abdullah</span>
+            <span class="user-name" id="lblStudentName">Student Profile</span>
             <span class="verified-sparkle" title="VULMS Connected">✓</span>
           </div>
-          <span class="student-pill" id="lblStudentId">BC240424582</span>
+          <span class="student-pill" id="lblStudentId">VULMS</span>
         </div>
       </div>
-      <div class="status-indicator-pill" id="statusBadge">
+      <div class="status-indicator-pill" id="statusBadge" title="Status">
         <span class="pulse-dot"></span>
         <span id="statusText">Connected</span>
       </div>
@@ -33,14 +33,14 @@
     <section class="hero-deadline" id="heroCard">
       <div class="hero-header">
         <div class="badge-group">
-          <span class="course-badge" id="spotlightCourse">CS101</span>
-          <span class="type-badge" id="spotlightType">Assignment</span>
+          <span class="course-badge" id="spotlightCourse">COURSE</span>
+          <span class="type-badge" id="spotlightType">Activity</span>
         </div>
-        <span class="countdown-badge" id="countdownPill">In 7 days</span>
+        <span class="countdown-badge" id="countdownPill">Upcoming</span>
       </div>
 
       <div class="hero-body">
-        <h2 class="deadline-title" id="spotlightTitle">Sample Assignment 1 (System Verification Test)</h2>
+        <h2 class="deadline-title" id="spotlightTitle">Loading pending deadlines...</h2>
         <div class="deadline-meta-row">
           <div class="meta-item">
             <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -49,7 +49,7 @@
               <line x1="8" y1="2" x2="8" y2="6"></line>
               <line x1="3" y1="10" x2="21" y2="10"></line>
             </svg>
-            <span id="spotlightDate">Due: 2026-10-26 (11:59 PM)</span>
+            <span id="spotlightDate">Due: Checking...</span>
           </div>
           <div class="meta-item alert-time">
             <svg class="meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -65,7 +65,7 @@
       <div class="empty-hero" id="emptyHeroState" style="display:none;">
         <div class="empty-icon-box">🎉</div>
         <h3>No Pending Deadlines</h3>
-        <p>Your calendar is up to date. Open VULMS or click Sync to refresh.</p>
+        <p>All assignments, quizzes, and GDBs are up to date.</p>
       </div>
 
       <a id="spotlightLink" href="#" target="_blank" class="hero-cta-btn">
@@ -80,71 +80,20 @@
     <!-- Quick Stats Metric Row -->
     <div class="stats-row">
       <div class="stat-box">
-        <span class="stat-number" id="valTotalTracked">1</span>
+        <span class="stat-number" id="valTotalTracked">0</span>
         <span class="stat-label">Total Tracked</span>
       </div>
       <div class="stat-box highlight-stat">
-        <span class="stat-number" id="valPendingReminders">1</span>
-        <span class="stat-label">Pending Noon Alerts</span>
+        <span class="stat-number" id="valPendingReminders">0</span>
+        <span class="stat-label">Pending Alerts</span>
       </div>
       <div class="stat-box">
-        <span class="stat-number" id="valSyncedCount">1</span>
+        <span class="stat-number" id="valSyncedCount">0</span>
         <span class="stat-label">Last Synced</span>
       </div>
     </div>
 
-    <!-- Google Sheet Backend Connection Card -->
-    <div class="email-setup-card" id="backendCard">
-      <div class="email-header">
-        <div class="email-title-group">
-          <svg class="mail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-          </svg>
-          <span class="email-card-label">Google Sheet Web App URL</span>
-        </div>
-        <span class="email-hint-pill" id="backendStatusPill">Setup Needed</span>
-      </div>
-
-      <div class="email-input-row">
-        <input type="url" id="inputWebAppUrl" class="email-input" placeholder="Paste Apps Script URL (https://script.google.com/...)">
-        <button id="btnSaveWebAppUrl" class="btn-save-inline" title="Save Backend URL">
-          <span>Connect</span>
-        </button>
-      </div>
-      <p class="email-subtext" id="backendHintText">
-        Required to sync rows to Sheet & trigger 12:00 PM email reminders.
-      </p>
-    </div>
-
-    <!-- Notification Email Card -->
-    <div class="email-setup-card">
-      <div class="email-header">
-        <div class="email-title-group">
-          <svg class="mail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-            <polyline points="22,6 12,13 2,6"></polyline>
-          </svg>
-          <span class="email-card-label">Reminder Email</span>
-        </div>
-        <span class="email-hint-pill" id="emailStatusPill">Personal / VU Email</span>
-      </div>
-
-      <div class="email-input-row">
-        <input type="email" id="inputPersonalEmail" class="email-input" placeholder="Enter your email (e.g. yourname@gmail.com)">
-        <button id="btnSaveEmail" class="btn-save-inline" title="Save Email Address">
-          <span>Save</span>
-        </button>
-      </div>
-      <p class="email-subtext" id="emailHintText">
-        Leave empty to use official: <span id="lblDefaultEmail">bc240424582mab@vu.edu.pk</span>
-      </p>
-    </div>
-
-    <!-- Feedback Toast Banner -->
-    <div id="feedbackBanner" class="feedback-banner" style="display:none;"></div>
-
-    <!-- Main Actions -->
+    <!-- Main Action -->
     <div class="cta-actions">
       <button id="btnManualSync" class="btn-sync-glow">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="sync-icon">
@@ -152,19 +101,34 @@
         </svg>
         <span>Sync LMS Deadlines</span>
       </button>
-
-      <div class="secondary-actions-grid">
-        <button id="btnSendTestEmail" class="btn-subtle" title="Send a verification test email to your inbox">
-          <span>✉️ Test Email</span>
-        </button>
-        <button id="btnSendTestRow" class="btn-subtle" title="Insert a test row into your Google Sheet">
-          <span>🧪 Test Sheet</span>
-        </button>
-        <button id="btnOpenSheet" class="btn-subtle" title="Open Google Drive / Sheet database">
-          <span>📊 View Sheet</span>
-        </button>
-      </div>
     </div>
+
+    <!-- Feedback Toast Banner -->
+    <div id="feedbackBanner" class="feedback-banner" style="display:none;"></div>
+
+    <!-- Alert Email Preference (Optional Collapsible) -->
+    <details class="settings-drawer" id="settingsDrawer">
+      <summary class="settings-summary">
+        <div class="summary-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="settings-icon">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+            <polyline points="22,6 12,13 2,6"></polyline>
+          </svg>
+          <span>Alert Email Preference</span>
+        </div>
+        <span class="settings-hint-pill" id="emailStatusPill">Official VU Email</span>
+      </summary>
+
+      <div class="settings-content">
+        <div class="input-inline-group">
+          <input type="email" id="inputPersonalEmail" class="setting-input" placeholder="Personal Gmail (optional)">
+          <button id="btnSaveEmail" class="btn-save-compact" title="Save Email">Save</button>
+        </div>
+        <div class="setting-hint" id="emailHintText">
+          Default: <span id="lblDefaultEmail">Official VU Email</span>
+        </div>
+      </div>
+    </details>
   </div>
 
   <script src="popup.js"></script>

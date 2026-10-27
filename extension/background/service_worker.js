@@ -4,15 +4,18 @@
  * local storage caching, retry queues, and badge state.
  */
 
+// Central Google Apps Script Web App URL shared by all students
+const CENTRAL_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzKf5AC-5KM3SjF9_rk8liib-QODyVizSuKVT_nNOK91xsUYLiIB585hNfohvTdWMY8/exec';
+
 // Initialize defaults on install
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[VULMS Background] Extension installed.');
   chrome.storage.local.get(['webAppUrl', 'secretToken'], (result) => {
     if (!result.webAppUrl) {
       chrome.storage.local.set({
-        webAppUrl: '',
+        webAppUrl: (!CENTRAL_WEB_APP_URL.includes('REPLACE')) ? CENTRAL_WEB_APP_URL : '',
         secretToken: '',
-        lastSyncStatus: 'unconfigured',
+        lastSyncStatus: (!CENTRAL_WEB_APP_URL.includes('REPLACE')) ? 'success' : 'unconfigured',
         cachedActivities: [],
         pendingRemindersCount: 0
       });
@@ -86,10 +89,10 @@ function updateBadge(text, color) {
  */
 async function handleActivitiesSync(data) {
   const settings = await chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentName', 'personalEmail', 'vuEmail']);
-  const webAppUrl = settings.webAppUrl;
+  const webAppUrl = settings.webAppUrl || CENTRAL_WEB_APP_URL;
   const secretToken = settings.secretToken || '';
 
-  if (!webAppUrl) {
+  if (!webAppUrl || webAppUrl.includes('REPLACE')) {
     console.warn('[VULMS Background] Web App URL not configured.');
     const actCount = (data.activities && data.activities.length > 0) ? data.activities.length : 0;
     updateBadge(actCount > 0 ? String(actCount) : 'SETUP', '#f59e0b'); // amber
@@ -168,9 +171,10 @@ async function handleActivitiesSync(data) {
  */
 async function processPendingSyncQueue() {
   const store = await chrome.storage.local.get(['webAppUrl', 'pendingSyncPayload']);
-  if (store.webAppUrl && store.pendingSyncPayload) {
+  const targetUrl = store.webAppUrl || CENTRAL_WEB_APP_URL;
+  if (targetUrl && !targetUrl.includes('REPLACE') && store.pendingSyncPayload) {
     try {
-      const res = await postToGoogleAppsScript(store.webAppUrl, store.pendingSyncPayload);
+      const res = await postToGoogleAppsScript(targetUrl, store.pendingSyncPayload);
       if (res.status === 'success') {
         await chrome.storage.local.remove('pendingSyncPayload');
         await chrome.storage.local.set({
@@ -251,8 +255,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const verifiedVu = store.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
       const targetEmail = newEmail || verifiedVu;
 
-      if (store.webAppUrl) {
-        postToGoogleAppsScript(store.webAppUrl, {
+      const targetUrl = store.webAppUrl || CENTRAL_WEB_APP_URL;
+      if (targetUrl && !targetUrl.includes('REPLACE')) {
+        postToGoogleAppsScript(targetUrl, {
           action: 'register_student',
           secretToken: store.secretToken || '',
           studentId: store.studentId || 'BC240424582',
