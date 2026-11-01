@@ -7,9 +7,16 @@
 // Central Google Apps Script Web App URL shared by all students
 const CENTRAL_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzKf5AC-5KM3SjF9_rk8liib-QODyVizSuKVT_nNOK91xsUYLiIB585hNfohvTdWMY8/exec';
 
+// Ensure toolbar badge stays clean immediately upon service worker startup
+try {
+  chrome.action.setBadgeText({ text: '' });
+} catch (e) {}
+
 // Initialize defaults on install
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[VULMS Background] Extension installed.');
+  // Ensure icon stays clean without badge count
+  chrome.action.setBadgeText({ text: '' });
   chrome.storage.local.get(['webAppUrl', 'secretToken'], (result) => {
     if (!result.webAppUrl) {
       chrome.storage.local.set({
@@ -71,14 +78,12 @@ async function postToGoogleAppsScript(webAppUrl, payload) {
 }
 
 /**
- * Updates extension icon badge
+ * Updates extension icon badge (Kept completely clean without numbers/text overlay per user preference)
  */
 function updateBadge(text, color) {
   try {
-    chrome.action.setBadgeText({ text: text || '' });
-    if (color) {
-      chrome.action.setBadgeBackgroundColor({ color: color });
-    }
+    // Keep toolbar icon clean - do not overlay count numbers
+    chrome.action.setBadgeText({ text: '' });
   } catch (e) {
     console.warn('[VULMS Background] Badge update error:', e);
   }
