@@ -426,9 +426,9 @@
         }
       }
 
-      studentId = (studentId || 'bc240424582').toLowerCase();
-      studentName = studentName || 'Muhammad Abdullah';
-      vuEmail = vuEmail || (studentId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${studentId}@vu.edu.pk`);
+      studentId = (studentId || '').toLowerCase();
+      studentName = studentName || 'VU Student';
+      vuEmail = vuEmail || (studentId ? `${studentId}@vu.edu.pk` : '');
 
       // Immediately notify background about student identity
       chrome.runtime.sendMessage({

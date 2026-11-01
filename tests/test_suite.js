@@ -69,26 +69,26 @@ console.log('\n[2B] Official VU Email & Student Name Validation:');
 const mockProfileDoc = {
   body: {
     innerText: `
-      MUHAMMAD ABDULLAH
-      bc240424582
-      bc240424582mab@vu.edu.pk
+      AHMED KHAN
+      bc190200111
+      bc190200111ak@vu.edu.pk
       (VU Email)
       Note: For any correction or change is required in your profile information, please write to studentprofile@vu.edu.pk
     `,
-    innerHTML: `<div>bc240424582mab@vu.edu.pk</div>`
+    innerHTML: `<div>bc190200111ak@vu.edu.pk</div>`
   },
   querySelector: () => null
 };
 
 const extractedEmail = extractor.extractOfficialVuEmail(mockProfileDoc);
-assert(extractedEmail === 'bc240424582mab@vu.edu.pk', 'Extracts exact official VU email with initials suffix (bc240424582mab@vu.edu.pk)', extractedEmail);
+assert(extractedEmail === 'bc190200111ak@vu.edu.pk', 'Extracts exact official VU email with initials suffix (bc190200111ak@vu.edu.pk)', extractedEmail);
 
 const profileResult = extractor.extractStudentProfile(mockProfileDoc);
-assert(profileResult.studentName === 'Muhammad Abdullah', 'Extracts verified student name Muhammad Abdullah', profileResult.studentName);
-assert(profileResult.studentId === 'bc240424582', 'Extracts student ID bc240424582', profileResult.studentId);
-assert(profileResult.vuEmail === 'bc240424582mab@vu.edu.pk', 'Extracts vuEmail matching student profile', profileResult.vuEmail);
+assert(profileResult.studentName === 'Ahmed Khan', 'Extracts verified student name Ahmed Khan', profileResult.studentName);
+assert(profileResult.studentId === 'bc190200111', 'Extracts student ID bc190200111', profileResult.studentId);
+assert(profileResult.vuEmail === 'bc190200111ak@vu.edu.pk', 'Extracts vuEmail matching student profile', profileResult.vuEmail);
 
-assert(extractor.isValidPersonName('MUHAMMAD ABDULLAH') === true, 'Validates genuine person name: MUHAMMAD ABDULLAH');
+assert(extractor.isValidPersonName('AHMED KHAN') === true, 'Validates genuine person name: AHMED KHAN');
 assert(extractor.isValidPersonName('G Management System') === false, 'Rejects system header: G Management System');
 assert(extractor.isValidPersonName('Learning Management System') === false, 'Rejects LMS title: Learning Management System');
 assert(extractor.isValidPersonName('Student Profile') === false, 'Rejects page title: Student Profile');
@@ -293,7 +293,7 @@ const mockVulmsPage = {
   }
 };
 
-const extractedFromMock = extractor.extractActivities(mockVulmsPage, 'bc240424582');
+const extractedFromMock = extractor.extractActivities(mockVulmsPage, 'bc190200111');
 assert(extractedFromMock.length === 2, 'Extracts exactly 2 quizzes and 0 grading scheme items', `Extracted: ${extractedFromMock.length}`);
 assert(extractedFromMock[0].course_code === 'CS302', 'Course code is CS302');
 assert(extractedFromMock[0].course_name === 'Digital Logic Design', 'Auto-resolved course title to "Digital Logic Design"');
@@ -310,14 +310,14 @@ const mockAspnetDoc = {
     // Note: simulating DOMParser document where innerText is undefined!
     innerText: undefined,
     textContent: 'VU Student Profile Page',
-    innerHTML: '<input id="txtEmail" value="bc240424582mab@vu.edu.pk" />'
+    innerHTML: '<input id="txtEmail" value="bc190200111ak@vu.edu.pk" />'
   },
   querySelectorAll: (selector) => {
     if (selector.includes('input')) {
       return [
-        { id: 'txtStudentId', name: 'ctl00$txtStudentId', value: 'BC240424582', getAttribute: () => 'BC240424582' },
-        { id: 'txtStudentName', name: 'ctl00$txtStudentName', value: 'Muhammad Abdullah', getAttribute: () => 'Muhammad Abdullah' },
-        { id: 'txtVUEmail', name: 'ctl00$txtVUEmail', value: 'bc240424582mab@vu.edu.pk', getAttribute: () => 'bc240424582mab@vu.edu.pk' }
+        { id: 'txtStudentId', name: 'ctl00$txtStudentId', value: 'BC190200111', getAttribute: () => 'BC190200111' },
+        { id: 'txtStudentName', name: 'ctl00$txtStudentName', value: 'Ahmed Khan', getAttribute: () => 'Ahmed Khan' },
+        { id: 'txtVUEmail', name: 'ctl00$txtVUEmail', value: 'bc190200111ak@vu.edu.pk', getAttribute: () => 'bc190200111ak@vu.edu.pk' }
       ];
     }
     return [];
@@ -326,9 +326,9 @@ const mockAspnetDoc = {
 };
 
 const profileExtracted = extractor.extractStudentProfile(mockAspnetDoc);
-assert(profileExtracted.studentId === 'bc240424582', 'Extracts student ID from ASP.NET form input without crashing when innerText is undefined');
-assert(profileExtracted.studentName === 'Muhammad Abdullah', 'Extracts student name from ASP.NET form input');
-assert(profileExtracted.vuEmail === 'bc240424582mab@vu.edu.pk', 'Extracts official VU email from ASP.NET form input');
+assert(profileExtracted.studentId === 'bc190200111', 'Extracts student ID from ASP.NET form input without crashing when innerText is undefined');
+assert(profileExtracted.studentName === 'Ahmed Khan', 'Extracts student name from ASP.NET form input');
+assert(profileExtracted.vuEmail === 'bc190200111ak@vu.edu.pk', 'Extracts official VU email from ASP.NET form input');
 
 // ----------------------------------------------------
 // Section 7: FullCalendar DOM Scraper Test
@@ -355,7 +355,7 @@ const mockFullCalendarDoc = {
   }
 };
 
-const fcExtracted = extractor.extractActivities(mockFullCalendarDoc, 'bc240424582');
+const fcExtracted = extractor.extractActivities(mockFullCalendarDoc, 'bc190200111');
 assert(fcExtracted.length === 1, 'Extracts FullCalendar event from .fc-event DOM');
 assert(fcExtracted[0].course_code === 'CS201', 'FullCalendar course code parsed as CS201');
 assert(fcExtracted[0].end_date === '2026-11-15', 'FullCalendar end date resolved to 2026-11-15');
@@ -391,7 +391,7 @@ const mockHomeCourseDoc = {
   }
 };
 
-const homeCourseExtracted = extractor.extractActivities(mockHomeCourseDoc, 'bc240424582');
+const homeCourseExtracted = extractor.extractActivities(mockHomeCourseDoc, 'bc190200111');
 assert(homeCourseExtracted.length === 1, 'Extracts activity from Home.aspx course dashboard card');
 assert(homeCourseExtracted[0].course_code === 'CS302', 'Dashboard course code resolved to CS302');
 assert(homeCourseExtracted[0].end_date === '2026-11-20', 'Dashboard end date resolved to 2026-11-20');
@@ -415,7 +415,7 @@ const rawJsonArray = JSON.stringify([
   }
 ]);
 
-const jsonArrayActs = extractor.extractActivitiesFromJson(rawJsonArray, 'bc240424582');
+const jsonArrayActs = extractor.extractActivitiesFromJson(rawJsonArray, 'bc190200111');
 assert(jsonArrayActs.length === 1, 'Parses standard JSON array from ActivityCalendar.aspx');
 assert(jsonArrayActs[0].course_code === 'CS101', 'JSON course code is CS101');
 assert(jsonArrayActs[0].end_date === '2026-11-06', 'JSON end date normalized to 2026-11-06');
@@ -435,7 +435,7 @@ const rawAspnetJson = JSON.stringify({
   ]
 });
 
-const aspnetJsonActs = extractor.extractActivitiesFromJson(rawAspnetJson, 'bc240424582');
+const aspnetJsonActs = extractor.extractActivitiesFromJson(rawAspnetJson, 'bc190200111');
 assert(aspnetJsonActs.length === 1, 'Parses ASP.NET { "d": [...] } wrapped JSON feed');
 assert(aspnetJsonActs[0].course_code === 'MTH101', 'ASP.NET JSON course code is MTH101');
 assert(aspnetJsonActs[0].activity_type === 'GDB', 'ASP.NET JSON activity type is GDB');
@@ -460,7 +460,7 @@ const htmlWithScriptJson = `
 </html>
 `;
 
-const htmlScriptActs = extractor.extractActivitiesFromHtml(htmlWithScriptJson, 'bc240424582');
+const htmlScriptActs = extractor.extractActivitiesFromHtml(htmlWithScriptJson, 'bc190200111');
 assert(htmlScriptActs.length === 1, 'Extracts JSON calendar events embedded in <script> tag');
 assert(htmlScriptActs[0].course_code === 'CS302', 'Script JSON course code is CS302');
 assert(htmlScriptActs[0].end_date === '2026-11-25', 'Script JSON end date is 2026-11-25');
@@ -486,14 +486,14 @@ assert(extractor.isUserAuthenticated(mockLoginPage) === false, 'Rejects unauthen
 const mockHomePage = {
   querySelector: (sel) => {
     if (sel.includes('lblStudentId') || sel.includes('student-id')) {
-      return { textContent: 'BC240424582', id: 'lblStudentId' };
+      return { textContent: 'BC190200111', id: 'lblStudentId' };
     }
     if (sel.includes('logout') || sel.includes('lnkLogout')) {
       return { href: 'Logout.aspx', id: 'lnkLogout' };
     }
     return null;
   },
-  body: { innerText: 'Welcome Muhammad Abdullah BC240424582 Logout Home Dashboard Courses' }
+  body: { innerText: 'Welcome Ahmed Khan BC190200111 Logout Home Dashboard Courses' }
 };
 assert(extractor.isUserAuthenticated(mockHomePage) === true, 'Validates authenticated VULMS homepage with verified student ID and logout link');
 
@@ -626,7 +626,7 @@ class MockSilentFrameDocument {
 const mockFrame = new MockSilentFrameDocument();
 
 // Initial check before click: table is not yet rendered
-const initialActs = extractor.extractActivities(mockFrame, 'bc240424582');
+const initialActs = extractor.extractActivities(mockFrame, 'bc190200111');
 assert(initialActs.length === 0, 'Silent frame initial view has 0 activities (Table not yet populated)');
 
 // Trigger Classic To-Do click
@@ -636,7 +636,7 @@ triggerEl.click();
 assert(mockFrame.classicClicked === true && mockFrame.tableRendered === true, 'Clicking Classic To-Do triggers table render inside silent frame');
 
 // Check after click: table is extracted!
-const postClickActs = extractor.extractActivities(mockFrame, 'bc240424582');
+const postClickActs = extractor.extractActivities(mockFrame, 'bc190200111');
 assert(postClickActs.length === 2, 'Extracts 2 quizzes automatically after Classic To-Do trigger without user navigating to page');
 assert(postClickActs[0].course_code === 'CS302' && postClickActs[0].end_date === '2026-11-04', 'First quiz details verified');
 
@@ -686,7 +686,7 @@ assert(manualRun.fromCache === false && clientCache.networkFetchCount === 2, 'Ma
 console.log('\n[13] RFC 5545 iCalendar (.ics) Generator Tests:');
 const sampleCalendarActs = [
   {
-    activity_key: 'bc240424582_CS101_Assignment_1',
+    activity_key: 'bc190200111_CS101_Assignment_1',
     course_code: 'CS101',
     course_name: 'Introduction to Computing',
     activity_title: 'Assignment No. 1, Fundamentals',
@@ -695,7 +695,7 @@ const sampleCalendarActs = [
     activity_url: 'https://vulms.vu.edu.pk/Assignment/Submit.aspx?id=101'
   },
   {
-    activity_key: 'bc240424582_CS302_Quiz_1',
+    activity_key: 'bc190200111_CS302_Quiz_1',
     course_code: 'CS302',
     course_name: 'Digital Logic Design',
     activity_title: 'Semester Quiz # 01',
@@ -705,7 +705,7 @@ const sampleCalendarActs = [
   }
 ];
 
-const icsOutput = extractor.generateIcsContent(sampleCalendarActs, 'bc240424582');
+const icsOutput = extractor.generateIcsContent(sampleCalendarActs, 'bc190200111');
 assert(icsOutput.startsWith('BEGIN:VCALENDAR') && icsOutput.endsWith('END:VCALENDAR'), 'RFC 5545 valid calendar envelope structure');
 assert(icsOutput.includes('X-WR-CALNAME:🎓 VULMS Deadlines'), 'Calendar display name tagged correctly');
 assert(icsOutput.includes('X-WR-TIMEZONE:Asia/Karachi'), 'Calendar timezone set to Asia/Karachi (PKT)');
@@ -714,7 +714,7 @@ assert(icsOutput.includes('DTSTART;VALUE=DATE:20261110'), 'Event start time set 
 assert(icsOutput.includes('DTEND;VALUE=DATE:20261111'), 'Event end time set to inclusive next-day date');
 assert(icsOutput.includes('SUMMARY:[CS101] Assignment: Assignment No. 1\\, Fundamentals'), 'Escapes commas in SUMMARY per RFC 5545');
 assert(icsOutput.includes('TRIGGER:-PT9H'), 'Native alarm VALARM set for morning on deadline day');
-assert(icsOutput.includes('UID:bc240424582_CS101_Assignment_1@vu.edu.pk'), 'Deterministic UID generation matches student activity key');
+assert(icsOutput.includes('UID:bc190200111_CS101_Assignment_1@vu.edu.pk'), 'Deterministic UID generation matches student activity key');
 
 // ----------------------------------------------------
 // Section 14: Google Calendar Web Intent URL Generator
@@ -780,8 +780,8 @@ class MockSheetCalendarSync {
 
 const mockCalSync = new MockSheetCalendarSync();
 const evtId1 = mockCalSync.insertActivity({
-  student_id: 'bc240424582',
-  activity_key: 'bc240424582_CS101_A1',
+  student_id: 'bc190200111',
+  activity_key: 'bc190200111_CS101_A1',
   course_code: 'CS101',
   activity_title: 'Assignment 1',
   activity_type: 'Assignment',
@@ -792,7 +792,7 @@ assert(evtId1 === 'gcal_evt_1001', 'Initial activity sync creates Google Calenda
 assert(mockCalSync.events.size === 1, 'Exactly 1 calendar event exists');
 
 // Extended deadline / Grace period:
-const updateRes = mockCalSync.extendDeadline('bc240424582_CS101_A1', '2026-11-11');
+const updateRes = mockCalSync.extendDeadline('bc190200111_CS101_A1', '2026-11-11');
 assert(updateRes.action === 'updated' && updateRes.eventId === evtId1, 'Deadline extension updates existing calendar event');
 assert(mockCalSync.events.size === 1, 'Extension produced 0 duplicate calendar events');
 assert(mockCalSync.events.get(evtId1).endDate === '2026-11-11', 'Calendar event date updated to new extended date');

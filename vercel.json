@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "public": true,
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/guide",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/manual",
+      "destination": "/index.html"
+    }
+  ]
+}
+

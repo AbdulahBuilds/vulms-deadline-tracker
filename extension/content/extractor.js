@@ -380,7 +380,7 @@
 
   /**
    * Scans document for the official Virtual University student email
-   * Format: <studentId><initials>@vu.edu.pk (e.g., bc240424582mab@vu.edu.pk)
+   * Format: <studentId><initials>@vu.edu.pk (e.g., bc230123456@vu.edu.pk)
    * Strictly excludes generic helpdesk/system emails like studentprofile@vu.edu.pk
    */
   function extractOfficialVuEmail(doc) {
@@ -441,13 +441,9 @@
 
   /**
    * Scans LMS header and profile containers for verified Student Name, ID, and VU Email
-   * Handles multi-line layouts:
-   *   MUHAMMAD ABDULLAH
-   *   (BC240424582)
-   *   bc240424582mab@vu.edu.pk
    */
   function extractStudentProfile(doc) {
-    if (!doc) return { studentId: 'bc240424582', studentName: 'Muhammad Abdullah', vuEmail: 'bc240424582mab@vu.edu.pk', defaultEmail: 'bc240424582@vu.edu.pk' };
+    if (!doc) return { studentId: '', studentName: 'VU Student', vuEmail: '', defaultEmail: '' };
 
     let studentId = null;
     let studentName = null;
@@ -473,7 +469,7 @@
       }
     } catch (e) {}
 
-    // 2. Table row cells: e.g. <td>Student ID</td><td>BC240424582</td> or <td>Name</td><td>Muhammad Abdullah</td>
+    // 2. Table row cells: e.g. <td>Student ID</td><td>BC123456789</td> or <td>Name</td><td>Student Name</td>
     try {
       if (doc.querySelectorAll) {
         const rows = doc.querySelectorAll('tr');
@@ -572,16 +568,16 @@
       studentName = studentName.replace(/[\r\n\t]+/g, ' ').trim();
       studentName = studentName.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
     } else {
-      studentName = 'Muhammad Abdullah';
+      studentName = 'VU Student';
     }
 
     // If vuEmail wasn't found from the page, generate standard fallback
     const resolvedVuEmail = vuEmail || (studentId ? `${studentId}@vu.edu.pk` : '');
 
     return {
-      studentId: studentId || 'bc240424582',
+      studentId: studentId || '',
       studentName: studentName,
-      vuEmail: vuEmail || (studentId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : resolvedVuEmail),
+      vuEmail: resolvedVuEmail,
       defaultEmail: resolvedVuEmail
     };
   }

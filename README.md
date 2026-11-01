@@ -15,7 +15,7 @@ A zero-maintenance, 100% free automated tracking and notification system designe
 - **☁️ Cloud-Powered Reminders**: Built on Google Apps Script and Google Cloud triggers. Your computer does **not** need to stay turned on for reminders to fire.
 - **🔒 100% Private & Free**: All data is stored in your personal Google Sheet and processed inside your personal Google Account. No third-party servers or subscriptions.
 - **✨ Clean Popup Interface**: Inspect active deadlines, sync status, and trigger on-demand sync directly from the Chrome toolbar.
-- **📅 Full Calendar Integration**: Automatically syncs deadlines into a dedicated `"🎓 VULMS Deadlines"` Google Calendar with color coding and custom reminders (12:00 PM PKT and 1 hour before midnight), plus a live RFC 5545 iCal/WebCal subscription feed for Apple Calendar (iPhone/Mac) and Microsoft Outlook.
+- **📅 Full Calendar Integration**: Automatically syncs deadlines into a dedicated `"🎓 VULMS Deadlines"` Google Calendar with color coding and native reminders on the deadline day, plus calendar subscription feed support for Apple Calendar (iPhone/Mac) and Microsoft Outlook.
 - **🛡️ Concurrency & Deduplication**: Employs deterministic composite keys (`activity_key`) and Google Apps Script `LockService` to prevent duplicate records or spam alerts.
 
 ---
@@ -91,7 +91,7 @@ For detailed step-by-step instructions with screenshots and troubleshooting, rea
    - Open Chrome and navigate to `chrome://extensions/`.
    - Enable **Developer mode** (top right).
    - Click **Load unpacked** and select the [`extension/`](extension/) directory.
-   - Click the extension icon in your browser bar, paste your Web App URL, and save!
+   - Click the extension icon in your browser bar, pin it, and deadlines will sync automatically when you open VULMS!
 
 ---
 

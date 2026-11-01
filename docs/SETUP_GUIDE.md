@@ -66,32 +66,27 @@ Total setup time: **under 5 minutes**.
 
 ---
 
-## Step 4: Connect & Test
+## Step 4: Verify & Start Using
 
 1. Click the **VULMS Tracker** icon in your Chrome toolbar.
-2. In the popup, click the **⚙️ (Settings)** icon.
-3. Paste the **Web app URL** you copied in Step 2.
-4. *(Optional)* Enter your name in **Student Display Name**.
-5. Click **Test Connection**:
-   - You should see: `✅ Connection Successful!`.
-6. Click **Send Test Email**:
-   - Open your Gmail inbox — you will have received a sample VULMS alert email!
-7. Click **Save Settings**.
+2. The extension is pre-configured and connects automatically to the cloud engine.
+3. *(Optional)* Click **Alert Email Preference** at the bottom of the popup if you want alerts forwarded to your personal Gmail instead of your default official VU email, and click **Save**.
 
 ---
 
-## Step 5: Start Using VULMS
+## Step 5: Automatic Background Sync
 
 1. Open your browser and log in to [VULMS](https://vulms.vu.edu.pk).
 2. Go to your **Home** or **Student Dashboard** / **To-Do Calendar**.
-3. The extension will automatically detect your Student ID, extract your active assignments, quizzes, and GDBs, and sync them to your Google Sheet!
-4. A small green toast notification will appear in the bottom-right corner confirming the sync.
+3. The extension automatically detects your student profile, captures your active assignments, quizzes, and GDBs, and syncs them to the cloud engine!
+4. A discreet green notification will appear in the bottom-right corner confirming the sync.
 5. You can now close your browser, turn off your computer, or go about your day.
-6. Whenever an activity reaches its deadline date, Google Cloud will automatically send you an email at **12:00 PM noon PKT** with the exact submission details and link!
+6. Whenever an activity reaches its deadline date, Google Cloud will automatically send you an email at **12:00 PM noon PKT** with the exact submission details and portal link!
 
 ---
 
 ## 🎉 You're All Set!
 
-- **Want to force an immediate refresh?** Open your VULMS tab and click the **Sync Now** button in the extension popup.
-- **Want to inspect your records?** Click **View Sheet** in the popup to see all current and past activities in your Google Sheet database.
+- **Want to force an immediate refresh?** Open your VULMS tab and click the **Sync LMS Deadlines** button in the extension popup.
+- **Want to refresh your Google Calendar?** Click the **Sync Google Calendar** button in the popup.
+- **Need help?** Click the **?** button in the popup toolbar to open the interactive Student Guide.

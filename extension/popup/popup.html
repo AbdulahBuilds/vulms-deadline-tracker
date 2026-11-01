@@ -23,9 +23,18 @@
           <span class="student-pill" id="lblStudentId">VULMS</span>
         </div>
       </div>
-      <div class="status-indicator-pill" id="statusBadge" title="Status">
-        <span class="pulse-dot"></span>
-        <span id="statusText">Connected</span>
+      <div class="top-nav-right">
+        <div class="status-indicator-pill" id="statusBadge" title="Status">
+          <span class="pulse-dot"></span>
+          <span id="statusText">Connected</span>
+        </div>
+        <button id="btnHelp" class="btn-help-icon" title="How to Use & Student Guide" aria-label="Help">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="help-svg">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -102,7 +111,7 @@
       </div>
       <div class="stat-box">
         <span class="stat-number" id="valSyncedCount">0</span>
-        <span class="stat-label">Last Synced</span>
+        <span class="stat-label">Synced Items</span>
       </div>
     </div>
 
@@ -152,6 +161,55 @@
         </div>
       </div>
     </details>
+
+    <!-- Clean Quick Help Modal (Overlays popup when ? is clicked) -->
+    <div id="helpModal" class="help-modal" style="display: none;">
+      <div class="help-modal-backdrop" id="helpModalBackdrop"></div>
+      <div class="help-modal-content">
+        <div class="help-modal-header">
+          <div class="help-title-group">
+            <span class="help-icon-badge">🎓</span>
+            <h3>How to Use</h3>
+          </div>
+          <button id="btnCloseHelp" class="btn-close-modal" aria-label="Close Help">&times;</button>
+        </div>
+        
+        <div class="help-steps-list">
+          <div class="help-step-item">
+            <span class="step-num">1</span>
+            <div class="step-desc">
+              <strong>Open VULMS</strong>
+              <p>Just log into <code>vulms.vu.edu.pk</code>. Deadlines automatically sync in the background!</p>
+            </div>
+          </div>
+          <div class="help-step-item">
+            <span class="step-num">2</span>
+            <div class="step-desc">
+              <strong>12:00 PM Email Alerts</strong>
+              <p>You'll receive an email reminder at 12:00 PM noon PKT on the deadline day (even with PC off).</p>
+            </div>
+          </div>
+          <div class="help-step-item">
+            <span class="step-num">3</span>
+            <div class="step-desc">
+              <strong>Custom Email & Calendar</strong>
+              <p>Click "Alert Email Preference" below to set your Gmail or sync to Google Calendar.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-modal-footer">
+          <button id="btnOpenFullGuide" class="btn-full-guide">
+            <span>Open Complete Student Guide</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mini-ext-icon">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="popup.js"></script>

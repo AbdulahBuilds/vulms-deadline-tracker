@@ -175,6 +175,41 @@ body {
   width: fit-content;
 }
 
+.top-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-help-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  color: var(--navy-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-subtle);
+  outline: none;
+}
+
+.btn-help-icon:hover {
+  background: var(--navy-50);
+  border-color: var(--navy-300);
+  color: var(--navy-600);
+  transform: translateY(-1px);
+}
+
+.help-svg {
+  width: 13.5px;
+  height: 13.5px;
+}
+
 .status-indicator-pill {
   display: inline-flex;
   align-items: center;
@@ -755,4 +790,181 @@ body {
   background: var(--accent-rose-bg);
   border: 1px solid var(--accent-rose-border);
   color: var(--accent-rose);
+}
+
+/* --------------------------------------------------------------------------
+   Quick Help Modal (Lightweight & Uncluttered)
+   -------------------------------------------------------------------------- */
+.help-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.help-modal-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(7, 21, 39, 0.45);
+  backdrop-filter: blur(2px);
+  animation: fadeIn 0.15s ease-out;
+}
+
+.help-modal-content {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 30px rgba(7, 21, 39, 0.25);
+  width: 100%;
+  max-width: 350px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: modalSlideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 10;
+}
+
+@keyframes modalSlideUp {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.help-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 10px;
+}
+
+.help-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-icon-badge {
+  font-size: 16px;
+}
+
+.help-title-group h3 {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--navy-950);
+}
+
+.btn-close-modal {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-navy-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  transition: all var(--transition-fast);
+}
+
+.btn-close-modal:hover {
+  color: var(--text-navy-deep);
+  background: #f1f5f9;
+}
+
+.help-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.help-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--navy-100);
+  color: var(--navy-700);
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.step-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step-desc strong {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--navy-900);
+}
+
+.step-desc p {
+  font-size: 11px;
+  color: var(--text-navy-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.step-desc code {
+  background: #f1f5f9;
+  color: var(--navy-700);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-family: monospace;
+}
+
+.help-modal-footer {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 12px;
+}
+
+.btn-full-guide {
+  width: 100%;
+  background: var(--navy-50);
+  border: 1px solid var(--navy-200);
+  color: var(--navy-700);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-full-guide:hover {
+  background: var(--navy-100);
+  border-color: var(--navy-300);
+  color: var(--navy-800);
+}
+
+.mini-ext-icon {
+  width: 13px;
+  height: 13px;
 }

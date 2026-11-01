@@ -13,8 +13,8 @@ try {
 } catch (e) {}
 
 // Initialize defaults on install
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('[VULMS Background] Extension installed.');
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('[VULMS Background] Extension installed/updated:', details ? details.reason : 'unknown');
   // Ensure icon stays clean without badge count
   chrome.action.setBadgeText({ text: '' });
   chrome.storage.local.get(['webAppUrl', 'secretToken'], (result) => {
@@ -31,6 +31,15 @@ chrome.runtime.onInstalled.addListener(() => {
 
   // Setup periodic sync alarm
   chrome.alarms.create('vulms_health_check', { periodInMinutes: 30 });
+
+  // On fresh install, automatically launch the interactive student guide in a tab
+  if (details && details.reason === 'install') {
+    try {
+      chrome.tabs.create({ url: chrome.runtime.getURL('guide/guide.html') });
+    } catch (e) {
+      console.warn('[VULMS Background] Could not launch guide on install:', e);
+    }
+  }
 });
 
 // Alarm handler
@@ -113,10 +122,10 @@ async function handleActivitiesSync(data) {
 
   updateBadge('SYNC', '#3b82f6'); // blue
 
-  const sId = (data.studentId || 'bc240424582').toLowerCase();
-  const verifiedVuEmail = data.vuEmail || settings.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
+  const sId = (data.studentId || '').toLowerCase();
+  const verifiedVuEmail = data.vuEmail || settings.vuEmail || (sId ? `${sId}@vu.edu.pk` : 'student@vu.edu.pk');
   const sEmail = settings.personalEmail || verifiedVuEmail;
-  const sName = settings.studentName || data.studentName || 'Muhammad Abdullah';
+  const sName = settings.studentName || data.studentName || 'VU Student';
 
   const payload = {
     action: 'sync_activities',
@@ -256,8 +265,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const newEmail = request.personalEmail;
     chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentId', 'studentName', 'vuEmail', 'cachedActivities'], async (store) => {
       await chrome.storage.local.set({ personalEmail: newEmail });
-      const sId = (store.studentId || 'bc240424582').toLowerCase();
-      const verifiedVu = store.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
+      const sId = (store.studentId || '').toLowerCase();
+      const verifiedVu = store.vuEmail || (sId ? `${sId}@vu.edu.pk` : 'student@vu.edu.pk');
       const targetEmail = newEmail || verifiedVu;
 
       const targetUrl = store.webAppUrl || CENTRAL_WEB_APP_URL;
@@ -265,15 +274,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         postToGoogleAppsScript(targetUrl, {
           action: 'register_student',
           secretToken: store.secretToken || '',
-          studentId: store.studentId || 'BC240424582',
-          studentName: store.studentName || 'Muhammad Abdullah',
+          studentId: store.studentId || 'unassigned',
+          studentName: store.studentName || 'VU Student',
           studentEmail: targetEmail,
           timestamp: new Date().toISOString()
         }).then(() => {
           if (store.cachedActivities && store.cachedActivities.length > 0) {
             handleActivitiesSync({
-              studentId: store.studentId || 'BC240424582',
-              studentName: store.studentName || 'Muhammad Abdullah',
+              studentId: store.studentId || 'unassigned',
+              studentName: store.studentName || 'VU Student',
               studentEmail: targetEmail,
               activities: store.cachedActivities
             });
@@ -322,14 +331,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (candidateName && !isSystemTitle) {
         updates.studentName = candidateName;
       } else if (!store.studentName || store.studentName.toLowerCase().includes('management')) {
-        updates.studentName = 'Muhammad Abdullah';
+        updates.studentName = 'VU Student';
       }
 
       const officialEmail = vuEmail || realEmail;
       if (officialEmail && !officialEmail.includes('studentprofile')) {
         updates.vuEmail = officialEmail;
-      } else if (!store.vuEmail) {
-        updates.vuEmail = 'bc240424582mab@vu.edu.pk';
       }
 
       chrome.storage.local.set(updates);
@@ -338,9 +345,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         postToGoogleAppsScript(store.webAppUrl, {
           action: 'register_student',
           secretToken: store.secretToken || '',
-          studentId: studentId || store.studentId || 'BC240424582',
-          studentName: updates.studentName || store.studentName || 'Muhammad Abdullah',
-          studentEmail: store.personalEmail || updates.vuEmail || store.vuEmail || `${studentId}@vu.edu.pk`,
+          studentId: studentId || store.studentId || 'unassigned',
+          studentName: updates.studentName || store.studentName || 'VU Student',
+          studentEmail: store.personalEmail || updates.vuEmail || store.vuEmail || (studentId ? `${studentId}@vu.edu.pk` : 'student@vu.edu.pk'),
           timestamp: new Date().toISOString()
         }).catch(() => {});
       }
@@ -355,7 +362,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: 'Web App URL not configured.' });
         return;
       }
-      const sId = store.studentId || 'BC240424582';
+      const sId = store.studentId || 'unassigned';
       const today = new Date();
       const end = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().substring(0, 10);
       const payload = {
@@ -407,7 +414,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const res = await postToGoogleAppsScript(targetUrl, {
           action: 'sync_calendar',
           secretToken: store.secretToken || '',
-          studentId: store.studentId || 'BC240424582',
+          studentId: store.studentId || 'unassigned',
           timestamp: new Date().toISOString()
         });
         sendResponse({ success: true, data: res });
@@ -436,8 +443,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { studentId, studentName, count, timestamp } = request.data || {};
     chrome.storage.local.get(['webAppUrl', 'cachedActivities', 'lastSyncStatus'], async (store) => {
       const updates = {
-        studentId: studentId || store.studentId || 'BC240424582',
-        studentName: studentName || store.studentName || 'Muhammad Abdullah'
+        studentId: studentId || store.studentId || 'unassigned',
+        studentName: studentName || store.studentName || 'VU Student'
       };
       if (count > 0) {
         updates.lastSyncTime = timestamp || new Date().toISOString();
@@ -509,8 +516,8 @@ function syncFromStorageCache(sendResponse) {
     if (store.cachedActivities && store.cachedActivities.length > 0 && store.webAppUrl) {
       try {
         const res = await handleActivitiesSync({
-          studentId: store.studentId || 'BC240424582',
-          studentName: store.studentName || 'Muhammad Abdullah',
+          studentId: store.studentId || 'unassigned',
+          studentName: store.studentName || 'VU Student',
           vuEmail: store.vuEmail,
           personalEmail: store.personalEmail,
           activities: store.cachedActivities

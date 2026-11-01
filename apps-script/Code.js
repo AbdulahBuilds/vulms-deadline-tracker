@@ -447,7 +447,7 @@
       var reminderMatches = false;
       if (reminderDateRaw) {
         var remDateStr = String(reminderDateRaw).trim();
-        if (remDateStr.indexOf(currentPktDate) !== -1 || remDateStr.indexOf('21/10/2026') !== -1) {
+        if (remDateStr.indexOf(currentPktDate) !== -1) {
           reminderMatches = true;
         }
       }

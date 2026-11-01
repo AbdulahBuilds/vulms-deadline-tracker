@@ -225,29 +225,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         'lastSyncStatus'
       ]);
 
-      // Clean up any old bogus auto-extracted emails like "studentprofile@vu.edu.pk"
+      // Clean up any legacy hardcoded developer data or bogus emails
       if (store.personalEmail && store.personalEmail.includes('studentprofile')) {
         await chrome.storage.local.remove('personalEmail');
         store.personalEmail = '';
       }
+      if (store.vuEmail && store.vuEmail.includes('bc240424582mab')) {
+        await chrome.storage.local.remove('vuEmail');
+        store.vuEmail = '';
+      }
+      if (store.studentId && store.studentId.toUpperCase() === 'BC240424582') {
+        await chrome.storage.local.remove('studentId');
+        store.studentId = '';
+      }
 
-      // Clean up any system title artifacts (e.g. "G Management System ...")
+      // Clean up any system title artifacts
       let studentName = store.studentName;
       if (!studentName ||
+          studentName === 'Muhammad Abdullah' ||
           studentName.toLowerCase().includes('management') ||
           studentName.toLowerCase().includes('system') ||
           studentName.toLowerCase().includes('lms')) {
-        studentName = 'Muhammad Abdullah';
-        await chrome.storage.local.set({ studentName: 'Muhammad Abdullah' });
+        studentName = 'VU Student';
+        if (store.studentName === 'Muhammad Abdullah') {
+          await chrome.storage.local.remove('studentName');
+        }
       }
 
-      // Profile & Verified Official VU Email (e.g. bc240424582mab@vu.edu.pk)
-      const studentId = (store.studentId || 'BC240424582').toUpperCase();
-      const defaultVuEmail = store.vuEmail || (studentId.toLowerCase() === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${studentId.toLowerCase()}@vu.edu.pk`);
+      // Profile & Verified Official VU Email
+      const studentId = store.studentId ? store.studentId.toUpperCase() : 'VULMS';
+      const defaultVuEmail = store.vuEmail || (store.studentId ? `${store.studentId.toLowerCase()}@vu.edu.pk` : 'student@vu.edu.pk');
 
       if (lblStudentName) lblStudentName.textContent = studentName;
       if (lblStudentId) lblStudentId.textContent = studentId;
-      if (userAvatar) userAvatar.textContent = getInitials(studentName);
+      if (userAvatar) userAvatar.textContent = getInitials(studentName === 'VU Student' ? 'VU' : studentName);
       if (lblDefaultEmail) lblDefaultEmail.textContent = defaultVuEmail;
 
       // Email Input & Badge
@@ -480,8 +491,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
 
-      const sId = (store.studentId || 'bc240424582').toLowerCase();
-      const defaultOfficial = store.vuEmail || (sId === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : `${sId}@vu.edu.pk`);
+      const sId = (store.studentId || '').toLowerCase();
+      const defaultOfficial = store.vuEmail || (sId ? `${sId}@vu.edu.pk` : 'student@vu.edu.pk');
       const targetEmail = store.personalEmail || defaultOfficial;
 
       btnSendTestEmail.disabled = true;
@@ -491,7 +502,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         action: 'SEND_TEST_EMAIL',
         webAppUrl: webAppUrl,
         secretToken: store.secretToken || '',
-        studentName: store.studentName || 'Muhammad Abdullah',
+        studentName: store.studentName || 'VU Student',
         studentEmail: targetEmail
       }, (res) => {
         btnSendTestEmail.disabled = false;
@@ -542,6 +553,39 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (btnOpenSheet) {
     btnOpenSheet.addEventListener('click', () => {
       chrome.tabs.create({ url: 'https://docs.google.com/spreadsheets/u/0/' });
+    });
+  }
+
+  // Student Quick Help Modal & Full Guide Handlers
+  const btnHelp = document.getElementById('btnHelp');
+  const helpModal = document.getElementById('helpModal');
+  const btnCloseHelp = document.getElementById('btnCloseHelp');
+  const helpModalBackdrop = document.getElementById('helpModalBackdrop');
+  const btnOpenFullGuide = document.getElementById('btnOpenFullGuide');
+
+  if (btnHelp && helpModal) {
+    btnHelp.addEventListener('click', () => {
+      helpModal.style.display = 'flex';
+    });
+  }
+
+  const closeHelpModal = () => {
+    if (helpModal) helpModal.style.display = 'none';
+  };
+
+  if (btnCloseHelp) btnCloseHelp.addEventListener('click', closeHelpModal);
+  if (helpModalBackdrop) helpModalBackdrop.addEventListener('click', closeHelpModal);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && helpModal && helpModal.style.display === 'flex') {
+      closeHelpModal();
+    }
+  });
+
+  if (btnOpenFullGuide) {
+    btnOpenFullGuide.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('guide/guide.html') });
+      closeHelpModal();
     });
   }
 

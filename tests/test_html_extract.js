@@ -34,6 +34,6 @@ const html = `
 </table>
 `;
 
-const res = ext.extractActivitiesFromHtml(html, 'bc240424582');
+const res = ext.extractActivitiesFromHtml(html, 'bc123456789');
 console.log('Result count:', res.length);
 console.log(JSON.stringify(res, null, 2));

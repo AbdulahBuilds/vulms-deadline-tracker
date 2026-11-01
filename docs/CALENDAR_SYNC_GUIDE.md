@@ -21,10 +21,8 @@ When deadlines are synchronized from VULMS to your Google Sheet, Google Apps Scr
 
 ### How It Works:
 1. **Dedicated Calendar**: Keeps your university deadlines separate from personal events so you can toggle it on/off anytime in your Google Calendar app.
-2. **Event Timing**: Each deadline is placed as an 11:00 PM – 11:59 PM PKT event on its due date.
-3. **Automated Reminders**:
-   - **12:00 PM (Noon) Alert**: 11 hours before midnight deadline.
-   - **10:00 PM Alert**: 1 hour before submission cut-off.
+2. **Event Timing**: Each deadline is placed as an All-Day event on its due date.
+3. **Automated Reminders**: Includes a native notification alert on the morning of the deadline day.
 4. **Color Coding**:
    - 🔵 **Assignments**: Cyan / Blue
    - 🟠 **Quizzes**: Orange
@@ -33,7 +31,7 @@ When deadlines are synchronized from VULMS to your Google Sheet, Google Apps Scr
 
 ### Manual Trigger:
 - In your Google Sheet: Click **🚀 VULMS Tracker > 8. 📅 Sync All to Google Calendar**.
-- In the Chrome Extension popup: Click **Sync Google Cal**.
+- In the Chrome Extension popup: Click **Sync Google Calendar**.
 
 ---
 

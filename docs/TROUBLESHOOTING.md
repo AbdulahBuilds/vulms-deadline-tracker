@@ -71,5 +71,5 @@ When you authorize the script in your Google Sheet, Google displays a security w
 
 1. Navigate to your VULMS Dashboard or Course page in Chrome.
 2. Click the **VULMS Tracker** extension icon.
-3. Click the **⚡ Sync Now** button.
-4. A green toast will appear on your VULMS screen confirming the number of activities updated in your Google Sheet.
+3. Click the **Sync LMS Deadlines** button.
+4. A green toast will appear on your VULMS screen confirming the sync.
