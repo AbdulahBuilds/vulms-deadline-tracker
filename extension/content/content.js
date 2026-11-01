@@ -88,7 +88,16 @@
       pointer-events: auto;
     `;
 
-    toast.innerHTML = `<span style="font-size:16px;">${icon}</span> <span>${message}</span>`;
+    const iconSpan = document.createElement('span');
+    iconSpan.style.fontSize = '16px';
+    iconSpan.textContent = icon;
+
+    const msgSpan = document.createElement('span');
+    msgSpan.textContent = message;
+
+    toast.textContent = '';
+    toast.appendChild(iconSpan);
+    toast.appendChild(msgSpan);
     container.appendChild(toast);
 
     requestAnimationFrame(() => {

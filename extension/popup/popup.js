@@ -447,13 +447,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Sync Google Calendar Button
   if (btnSyncGoogleCal) {
     btnSyncGoogleCal.addEventListener('click', async () => {
-      const originalHtml = btnSyncGoogleCal.innerHTML;
+      const labelSpan = btnSyncGoogleCal.querySelector('span');
+      const originalLabel = labelSpan ? labelSpan.textContent : 'Sync Google Calendar';
       btnSyncGoogleCal.disabled = true;
-      btnSyncGoogleCal.textContent = 'Syncing...';
+      if (labelSpan) labelSpan.textContent = 'Syncing...';
 
       chrome.runtime.sendMessage({ action: 'SYNC_CALENDAR' }, (res) => {
         btnSyncGoogleCal.disabled = false;
-        btnSyncGoogleCal.innerHTML = originalHtml;
+        if (labelSpan) labelSpan.textContent = originalLabel;
 
         if (res && res.success) {
           const data = res.data || {};
