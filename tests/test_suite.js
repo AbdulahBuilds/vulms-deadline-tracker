@@ -680,6 +680,123 @@ assert(clientCache.networkFetchCount === 1, '4x repeated navigation within TTL c
 const manualRun = clientCache.fetchData(true, 25000);
 assert(manualRun.fromCache === false && clientCache.networkFetchCount === 2, 'Manual sync forces fresh fetch and updates cache');
 
+// ----------------------------------------------------
+// Section 13: RFC 5545 iCalendar Feed Compliance Tests
+// ----------------------------------------------------
+console.log('\n[13] RFC 5545 iCalendar (.ics) Generator Tests:');
+const sampleCalendarActs = [
+  {
+    activity_key: 'bc240424582_CS101_Assignment_1',
+    course_code: 'CS101',
+    course_name: 'Introduction to Computing',
+    activity_title: 'Assignment No. 1, Fundamentals',
+    activity_type: 'Assignment',
+    end_date: '2026-11-10',
+    activity_url: 'https://vulms.vu.edu.pk/Assignment/Submit.aspx?id=101'
+  },
+  {
+    activity_key: 'bc240424582_CS302_Quiz_1',
+    course_code: 'CS302',
+    course_name: 'Digital Logic Design',
+    activity_title: 'Semester Quiz # 01',
+    activity_type: 'Quiz',
+    end_date: '2026-11-14',
+    activity_url: 'https://vulms.vu.edu.pk/Quiz/Start.aspx?id=8831'
+  }
+];
+
+const icsOutput = extractor.generateIcsContent(sampleCalendarActs, 'bc240424582');
+assert(icsOutput.startsWith('BEGIN:VCALENDAR') && icsOutput.endsWith('END:VCALENDAR'), 'RFC 5545 valid calendar envelope structure');
+assert(icsOutput.includes('X-WR-CALNAME:🎓 VULMS Deadlines'), 'Calendar display name tagged correctly');
+assert(icsOutput.includes('X-WR-TIMEZONE:Asia/Karachi'), 'Calendar timezone set to Asia/Karachi (PKT)');
+assert(icsOutput.includes('BEGIN:VTIMEZONE') && icsOutput.includes('TZOFFSETTO:+0500'), 'Standard VTIMEZONE block for PKT offset defined');
+assert(icsOutput.includes('DTSTART;VALUE=DATE:20261110'), 'Event start time set to All-Day date');
+assert(icsOutput.includes('DTEND;VALUE=DATE:20261111'), 'Event end time set to inclusive next-day date');
+assert(icsOutput.includes('SUMMARY:[CS101] Assignment: Assignment No. 1\\, Fundamentals'), 'Escapes commas in SUMMARY per RFC 5545');
+assert(icsOutput.includes('TRIGGER:-PT9H'), 'Native alarm VALARM set for morning on deadline day');
+assert(icsOutput.includes('UID:bc240424582_CS101_Assignment_1@vu.edu.pk'), 'Deterministic UID generation matches student activity key');
+
+// ----------------------------------------------------
+// Section 14: Google Calendar Web Intent URL Generator
+// ----------------------------------------------------
+console.log('\n[14] Google Calendar Web Intent URL Tests:');
+const gcalUrl = extractor.generateGoogleCalendarUrl(sampleCalendarActs[0]);
+assert(gcalUrl.startsWith('https://calendar.google.com/calendar/render?'), 'Produces Google Calendar render web intent URL');
+assert(gcalUrl.includes('action=TEMPLATE'), 'Includes action=TEMPLATE');
+assert(gcalUrl.includes('20261110') && gcalUrl.includes('20261111'), 'Includes properly formatted All-Day date interval');
+assert(gcalUrl.includes('%5BCS101%5D'), 'Encodes course code in title parameter');
+assert(extractor.generateGoogleCalendarUrl(null) === '#', 'Gracefully handles null activity');
+assert(extractor.generateGoogleCalendarUrl({}) === '#', 'Gracefully handles activity missing end_date');
+
+// ----------------------------------------------------
+// Section 15: Calendar Sync State Machine Simulation
+// ----------------------------------------------------
+console.log('\n[15] Calendar Sync State Machine Simulation:');
+class MockSheetCalendarSync {
+  constructor() {
+    this.events = new Map(); // eventId -> eventData
+    this.sheetRows = [];
+    this.nextEventId = 1001;
+  }
+
+  insertActivity(act) {
+    const eventId = `gcal_evt_${this.nextEventId++}`;
+    this.events.set(eventId, {
+      title: `[${act.course_code}] ${act.activity_type}: ${act.activity_title}`,
+      endDate: act.end_date,
+      reminders: [660, 60]
+    });
+
+    const row = [
+      act.student_id,
+      act.activity_key,
+      act.course_code,
+      act.activity_title,
+      act.activity_type,
+      act.end_date,
+      'active',
+      eventId, // col 20
+      '2026-11-01 12:00:00' // col 21
+    ];
+    this.sheetRows.push(row);
+    return eventId;
+  }
+
+  extendDeadline(activityKey, newEndDate) {
+    const row = this.sheetRows.find(r => r[1] === activityKey);
+    if (!row) return null;
+
+    row[5] = newEndDate;
+    const existingEventId = row[7];
+    if (existingEventId && this.events.has(existingEventId)) {
+      const evt = this.events.get(existingEventId);
+      evt.endDate = newEndDate; // Updates existing event without duplicating
+      row[8] = '2026-11-02 12:00:00';
+      return { action: 'updated', eventId: existingEventId };
+    }
+    return null;
+  }
+}
+
+const mockCalSync = new MockSheetCalendarSync();
+const evtId1 = mockCalSync.insertActivity({
+  student_id: 'bc240424582',
+  activity_key: 'bc240424582_CS101_A1',
+  course_code: 'CS101',
+  activity_title: 'Assignment 1',
+  activity_type: 'Assignment',
+  end_date: '2026-11-10'
+});
+
+assert(evtId1 === 'gcal_evt_1001', 'Initial activity sync creates Google Calendar event ID');
+assert(mockCalSync.events.size === 1, 'Exactly 1 calendar event exists');
+
+// Extended deadline / Grace period:
+const updateRes = mockCalSync.extendDeadline('bc240424582_CS101_A1', '2026-11-11');
+assert(updateRes.action === 'updated' && updateRes.eventId === evtId1, 'Deadline extension updates existing calendar event');
+assert(mockCalSync.events.size === 1, 'Extension produced 0 duplicate calendar events');
+assert(mockCalSync.events.get(evtId1).endDate === '2026-11-11', 'Calendar event date updated to new extended date');
+
 console.log('\n======================================================');
 console.log(`TEST SUMMARY: ${passCount} PASSED, ${failCount} FAILED`);
 console.log('======================================================\n');

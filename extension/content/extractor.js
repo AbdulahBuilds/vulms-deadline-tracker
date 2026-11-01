@@ -1296,6 +1296,124 @@
     return null;
   }
 
+  /**
+   * Generates a Google Calendar Web Intent URL for 1-click event creation
+   */
+  function getNextDayClean(dateStr) {
+    const parts = dateStr.split('-');
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    const dt = new Date(y, m, d + 1);
+    const nextY = dt.getFullYear();
+    const nextM = String(dt.getMonth() + 1).padStart(2, '0');
+    const nextD = String(dt.getDate()).padStart(2, '0');
+    return `${nextY}${nextM}${nextD}`;
+  }
+
+  /**
+   * Generates a Google Calendar Web Intent URL for 1-click event creation
+   */
+  function generateGoogleCalendarUrl(activity) {
+    if (!activity || !activity.end_date) return '#';
+    const courseCode = activity.course_code || 'VU';
+    const activityType = activity.activity_type || 'Activity';
+    const activityTitle = activity.activity_title || 'Deadline';
+    const title = `[${courseCode}] ${activityType}: ${activityTitle}`;
+
+    const dateClean = activity.end_date.replace(/-/g, '');
+    const nextDateClean = getNextDayClean(activity.end_date);
+    const dates = `${dateClean}/${nextDateClean}`;
+
+    const details = [
+      `Course: ${activity.course_name ? (courseCode + ' — ' + activity.course_name) : courseCode}`,
+      `Activity: ${activityTitle}`,
+      `Type: ${activityType}`,
+      `Deadline: ${activity.end_date} (11:59 PM PKT)`,
+      `Submission Link: ${activity.activity_url || 'https://vulms.vu.edu.pk'}`,
+      '',
+      'Automated by VULMS Smart Deadline Tracker 🎓'
+    ].join('\n');
+
+    const params = new URLSearchParams({
+      action: 'TEMPLATE',
+      text: title,
+      dates: dates,
+      details: details,
+      location: activity.activity_url || 'https://vulms.vu.edu.pk'
+    });
+
+    return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  }
+
+  /**
+   * Generates a standard RFC 5545 iCalendar string
+   */
+  function generateIcsContent(activities, studentId) {
+    const nowUtc = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//VULMS Smart Deadline Tracker//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:🎓 VULMS Deadlines',
+      'X-WR-TIMEZONE:Asia/Karachi',
+      'BEGIN:VTIMEZONE',
+      'TZID:Asia/Karachi',
+      'X-LIC-LOCATION:Asia/Karachi',
+      'BEGIN:STANDARD',
+      'TZOFFSETFROM:+0500',
+      'TZOFFSETTO:+0500',
+      'TZNAME:PKT',
+      'DTSTART:19700101T000000',
+      'END:STANDARD',
+      'END:VTIMEZONE'
+    ];
+
+    const list = activities || [];
+    for (let i = 0; i < list.length; i++) {
+      const act = list[i];
+      if (!act.end_date) continue;
+
+      const dateClean = act.end_date.replace(/-/g, '');
+      const nextDateClean = getNextDayClean(act.end_date);
+
+      const course = act.course_code || 'VU';
+      const type = act.activity_type || 'Activity';
+      const title = act.activity_title || 'Deadline';
+      const summary = `[${course}] ${type}: ${title}`.replace(/[,;\\]/g, '\\$&');
+
+      const desc = `Course: ${act.course_name ? (course + ' - ' + act.course_name) : course}\\n` +
+                   `Activity: ${title}\\n` +
+                   `Type: ${type}\\n` +
+                   `Due: ${act.end_date} 11:59 PM PKT\\n` +
+                   `URL: ${act.activity_url || 'https://vulms.vu.edu.pk'}\\n\\n` +
+                   `Tracked by VULMS Smart Deadline Tracker`;
+
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:${act.activity_key || ('vulms_' + i)}@vu.edu.pk`);
+      lines.push(`DTSTAMP:${nowUtc}`);
+      lines.push(`DTSTART;VALUE=DATE:${dateClean}`);
+      lines.push(`DTEND;VALUE=DATE:${nextDateClean}`);
+      lines.push(`SUMMARY:${summary}`);
+      lines.push(`DESCRIPTION:${desc}`);
+      lines.push(`URL:${act.activity_url || 'https://vulms.vu.edu.pk'}`);
+      lines.push('STATUS:CONFIRMED');
+
+      lines.push('BEGIN:VALARM');
+      lines.push('TRIGGER:-PT9H');
+      lines.push('ACTION:DISPLAY');
+      lines.push(`DESCRIPTION:VULMS Deadline Alert: ${summary}`);
+      lines.push('END:VALARM');
+
+      lines.push('END:VEVENT');
+    }
+
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
+  }
+
   return {
     normalizeDate,
     inferActivityType,
@@ -1311,7 +1429,9 @@
     extractActivitiesFromHtml,
     hashString,
     isUserAuthenticated,
-    findClassicToDoElement
+    findClassicToDoElement,
+    generateGoogleCalendarUrl,
+    generateIcsContent
   };
 });
 

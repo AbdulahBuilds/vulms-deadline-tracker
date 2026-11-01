@@ -15,6 +15,7 @@ A zero-maintenance, 100% free automated tracking and notification system designe
 - **☁️ Cloud-Powered Reminders**: Built on Google Apps Script and Google Cloud triggers. Your computer does **not** need to stay turned on for reminders to fire.
 - **🔒 100% Private & Free**: All data is stored in your personal Google Sheet and processed inside your personal Google Account. No third-party servers or subscriptions.
 - **✨ Clean Popup Interface**: Inspect active deadlines, sync status, and trigger on-demand sync directly from the Chrome toolbar.
+- **📅 Full Calendar Integration**: Automatically syncs deadlines into a dedicated `"🎓 VULMS Deadlines"` Google Calendar with color coding and custom reminders (12:00 PM PKT and 1 hour before midnight), plus a live RFC 5545 iCal/WebCal subscription feed for Apple Calendar (iPhone/Mac) and Microsoft Outlook.
 - **🛡️ Concurrency & Deduplication**: Employs deterministic composite keys (`activity_key`) and Google Apps Script `LockService` to prevent duplicate records or spam alerts.
 
 ---
@@ -51,6 +52,7 @@ flowchart TD
 │   ├── Code.js                  # Apps Script Web App (doPost, upsert, hourly trigger)
 │   └── EmailTemplate.html       # Responsive HTML email notification template
 ├── docs/
+│   ├── CALENDAR_SYNC_GUIDE.md   # Setup guide for Google Calendar, Apple Calendar & Outlook
 │   ├── SETUP_GUIDE.md           # 5-minute step-by-step student setup guide
 │   ├── SPREADSHEET_TEMPLATE.md  # Schema definitions, column formatting, and formulas
 │   └── TROUBLESHOOTING.md       # Debugging checklist and FAQ

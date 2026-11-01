@@ -27,6 +27,10 @@ This document details the exact schema, constraints, and optional conditional fo
 | 15 | **O** | `created_at` | DateTime | Initial record insertion time |
 | 16 | **P** | `updated_at` | DateTime | Last modification time (e.g. deadline shift) |
 | 17 | **Q** | `last_synced_at` | DateTime | Last time seen in active VULMS session |
+| 18 | **R** | `student_name` | String | Verified student name |
+| 19 | **S** | `student_email` | String | Alert destination email (VU or personal Gmail) |
+| 20 | **T** | `calendar_event_id` | String | Google Calendar Event ID |
+| 21 | **U** | `calendar_synced_at` | DateTime | Last time synchronized with Google Calendar |
 
 ---
 
@@ -34,7 +38,7 @@ This document details the exact schema, constraints, and optional conditional fo
 
 To make your Google Sheet visually dynamic and easy to monitor:
 
-1. Select range `A2:Q1000`.
+1. Select range `A2:U1000`.
 2. Click **Format** &gt; **Conditional formatting**.
 3. Add the following rules:
 

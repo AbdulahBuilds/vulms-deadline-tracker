@@ -396,6 +396,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === 'SYNC_CALENDAR') {
+    chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentId'], async (store) => {
+      const targetUrl = store.webAppUrl || CENTRAL_WEB_APP_URL;
+      if (!targetUrl || targetUrl.includes('REPLACE')) {
+        sendResponse({ success: false, error: 'Web App URL not configured.' });
+        return;
+      }
+      try {
+        const res = await postToGoogleAppsScript(targetUrl, {
+          action: 'sync_calendar',
+          secretToken: store.secretToken || '',
+          studentId: store.studentId || 'BC240424582',
+          timestamp: new Date().toISOString()
+        });
+        sendResponse({ success: true, data: res });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    });
+    return true;
+  }
+
   if (request.action === 'SEND_TEST_EMAIL') {
     const { webAppUrl, secretToken, studentName, studentEmail } = request;
     postToGoogleAppsScript(webAppUrl, {

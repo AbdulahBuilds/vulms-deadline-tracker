@@ -35,6 +35,9 @@
       .addSeparator()
       .addItem('6. ✉️ Set / Update Alert Email Address', 'promptAndUpdateStudentEmail')
       .addItem('7. 📊 View System Status', 'viewSystemStatus')
+      .addSeparator()
+      .addItem('8. 📅 Sync All to Google Calendar', 'syncAllActivitiesFromMenu')
+      .addItem('9. 🔗 Get iCal / Apple Calendar Feed URL', 'showIcalFeedUrlDialog')
       .addToUi();
   }
 
@@ -106,6 +109,11 @@
         return jsonResponse(result);
       }
 
+      if (action === 'sync_calendar') {
+        var calResult = syncAllActivitiesToGoogleCalendar(payload.studentId);
+        return jsonResponse(calResult);
+      }
+
       return jsonResponse({ status: 'error', message: 'Unknown action: ' + action });
 
     } catch (err) {
@@ -123,13 +131,22 @@
    * Web App Entry Point: GET (For browser status check)
    */
   function doGet(e) {
+    if (e && e.parameter && (e.parameter.feed === 'ical' || e.parameter.action === 'ical')) {
+      var studentId = e.parameter.studentId || '';
+      var icsContent = generateIcsFeed(studentId);
+      return ContentService.createTextOutput(icsContent)
+        .setMimeType(ContentService.MimeType.ICAL);
+    }
+
     var pktNow = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss');
     var userEmail = Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail();
     return ContentService.createTextOutput(
       'VULMS Smart Deadline Tracker Web App is ACTIVE.\n' +
       'Current PKT Time: ' + pktNow + '\n' +
       'Connected User Account: ' + userEmail + '\n' +
-      'All systems nominal.'
+      'All systems nominal.\n\n' +
+      'To subscribe to your live deadline calendar, use:\n' +
+      ScriptApp.getService().getUrl() + '?feed=ical'
     ).setMimeType(ContentService.MimeType.TEXT);
   }
 
@@ -197,7 +214,9 @@
       'updated_at',         // P (16)
       'last_synced_at',     // Q (17)
       'student_name',       // R (18)
-      'student_email'       // S (19)
+      'student_email',      // S (19)
+      'calendar_event_id',  // T (20)
+      'calendar_synced_at'  // U (21)
     ];
 
     if (!sheet) {
@@ -214,6 +233,14 @@
       // If empty sheet, append headers
       if (sheet.getLastRow() === 0) {
         sheet.appendRow(headers);
+      } else if (sheet.getLastColumn() < headers.length) {
+        // Auto-migrate schema: append missing columns (calendar_event_id, calendar_synced_at)
+        for (var h = sheet.getLastColumn(); h < headers.length; h++) {
+          sheet.getRange(1, h + 1).setValue(headers[h])
+            .setBackground('#1e293b')
+            .setFontColor('#ffffff')
+            .setFontWeight('bold');
+        }
       }
     }
 
@@ -291,7 +318,9 @@
           currentTimestamp, // updated_at
           currentTimestamp, // last_synced_at
           payload.studentName || item.student_name || 'Muhammad Abdullah',
-          payload.studentEmail || item.student_email || (studentId.toLowerCase() === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : resolveRecipientEmail(payload.studentEmail, studentId))
+          payload.studentEmail || item.student_email || (studentId.toLowerCase() === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : resolveRecipientEmail(payload.studentEmail, studentId)),
+          '', // calendar_event_id
+          ''  // calendar_synced_at
         ]);
         inserted++;
       } else {
@@ -363,13 +392,22 @@
       }
     }
 
+    // Auto-sync active deadlines to Google Calendar
+    var calSyncResult = { synced: 0, errors: 0 };
+    try {
+      calSyncResult = syncAllActivitiesToGoogleCalendar(studentId);
+    } catch (calErr) {
+      console.warn('[Apps Script] Auto calendar sync warning:', calErr.message || calErr);
+    }
+
     return {
       status: 'success',
       inserted: inserted,
       updated: updated,
       skipped: skipped,
       totalTracked: updatedData.length - 1,
-      pendingReminders: pendingCount
+      pendingReminders: pendingCount,
+      calendarSync: calSyncResult
     };
   }
 
@@ -827,5 +865,355 @@
         ui.ButtonSet.OK
       );
     }
+  }
+
+  // =========================================================================
+  // 📅 CALENDAR SYNCHRONIZATION ENGINE (Google Calendar & RFC 5545 iCal Feed)
+  // =========================================================================
+
+  /**
+   * Retrieves or creates a dedicated secondary calendar named '🎓 VULMS Deadlines'.
+   * Keeping university deadlines in a dedicated calendar prevents cluttering personal schedules.
+   */
+  function getOrCreateVulmsCalendar() {
+    var calName = '🎓 VULMS Deadlines';
+    var cals = CalendarApp.getCalendarsByName(calName);
+    if (cals && cals.length > 0) {
+      return cals[0];
+    }
+
+    try {
+      var newCal = CalendarApp.createCalendar(calName, {
+        summary: 'Virtual University of Pakistan (VULMS) Assignments, Quizzes & GDB Deadlines',
+        timeZone: CONFIG.TIMEZONE
+      });
+      try {
+        if (CalendarApp.Color && CalendarApp.Color.BLUE) {
+          newCal.setColor(CalendarApp.Color.BLUE);
+        }
+      } catch (e) {}
+      return newCal;
+    } catch (err) {
+      console.warn('[Calendar] Secondary calendar creation unavailable, falling back to primary:', err);
+      return CalendarApp.getDefaultCalendar();
+    }
+  }
+
+  /**
+   * Synchronizes a single activity row to Google Calendar.
+   * Handles creation, date shifts (grace period extensions), color coding, and reminders.
+   */
+  function syncActivityToGoogleCalendar(cal, rowData, rowNum, sheet) {
+    var studentId = String(rowData[0] || '').trim();
+    var courseCode = String(rowData[3] || 'VU Course').trim();
+    var courseName = String(rowData[4] || '').trim();
+    var activityTitle = String(rowData[5] || 'Activity').trim();
+    var activityType = String(rowData[6] || 'Assignment').trim();
+    var rawEndDate = rowData[8];
+    var activityUrl = String(rowData[9] || 'https://vulms.vu.edu.pk').trim();
+    var status = String(rowData[10] || 'active').trim();
+    var existingEventId = String(rowData[19] || '').trim();
+
+    if (!rawEndDate) return null;
+
+    var endDate = Utilities.formatDate(new Date(rawEndDate), CONFIG.TIMEZONE, 'yyyy-MM-dd');
+    var currentTimestamp = Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss');
+
+    // Build event title and rich description
+    var eventTitle = '[' + courseCode + '] ' + activityType + ': ' + activityTitle;
+    var eventDescription = [
+      '📚 Course: ' + (courseName ? (courseCode + ' — ' + courseName) : courseCode),
+      '📝 Activity: ' + activityTitle,
+      '🏷️ Type: ' + activityType,
+      '⏰ Due: ' + endDate + ' at 11:59 PM PKT',
+      '🔗 Submission Link: ' + activityUrl,
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🎓 Auto-synced by VULMS Smart Deadline Tracker'
+    ].join('\n');
+
+    // Target All-Day Deadline Event on endDate (shows in top banner all day)
+    var dateParts = endDate.split('-');
+    var targetDate = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
+
+    var event = null;
+    if (existingEventId) {
+      try {
+        event = cal.getEventById(existingEventId);
+      } catch (e) {
+        event = null;
+      }
+    }
+
+    if (event) {
+      // Update existing calendar event if deadline or details changed
+      event.setTitle(eventTitle);
+      if (typeof event.setAllDayDate === 'function') {
+        event.setAllDayDate(targetDate);
+      } else {
+        event.setTime(targetDate, new Date(targetDate.getTime() + 24 * 60 * 60 * 1000));
+      }
+      event.setDescription(eventDescription);
+      event.setLocation(activityUrl);
+    } else {
+      // Create new All-Day event
+      event = cal.createAllDayEvent(eventTitle, targetDate, {
+        description: eventDescription,
+        location: activityUrl
+      });
+
+      // Configure notification reminder for all-day event
+      try {
+        event.removeAllReminders();
+        event.addPopupReminder(0); // Alert on day of deadline
+      } catch (remErr) {
+        console.warn('[Calendar] Reminder configuration note:', remErr);
+      }
+
+      // Color code by activity type: Quizzes = Orange, GDBs = Purple, Assignments = Cyan
+      try {
+        var typeLower = activityType.toLowerCase();
+        if (typeLower.includes('quiz')) {
+          event.setColor(CalendarApp.EventColor ? CalendarApp.EventColor.ORANGE : '6');
+        } else if (typeLower.includes('gdb') || typeLower.includes('discussion')) {
+          event.setColor(CalendarApp.EventColor ? CalendarApp.EventColor.MAUVE : '3');
+        } else {
+          event.setColor(CalendarApp.EventColor ? CalendarApp.EventColor.CYAN : '7');
+        }
+      } catch (colorErr) {}
+    }
+
+    var eventId = event.getId();
+
+    // Persist event ID and timestamp into Sheet columns T (20) & U (21)
+    if (sheet && rowNum) {
+      sheet.getRange(rowNum, 20).setValue(eventId);
+      sheet.getRange(rowNum, 21).setValue(currentTimestamp);
+    }
+
+    return eventId;
+  }
+
+  /**
+   * Synchronizes all active/pending deadlines from the Google Sheet to Google Calendar.
+   */
+  function syncAllActivitiesToGoogleCalendar(targetStudentId) {
+    var sheet = getOrCreateActivitiesSheet();
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return { status: 'success', synced: 0, message: 'No activities found to sync.' };
+    }
+
+    var cal = getOrCreateVulmsCalendar();
+    var now = new Date();
+    var todayPkt = Utilities.formatDate(now, CONFIG.TIMEZONE, 'yyyy-MM-dd');
+
+    var syncedCount = 0;
+    var updatedCount = 0;
+    var errorCount = 0;
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var studentId = String(row[0] || '').trim();
+      var rawEndDate = row[8];
+      var status = String(row[10] || '').trim();
+      var existingEventId = String(row[19] || '').trim();
+
+      if (!rawEndDate) continue;
+      var endDate = Utilities.formatDate(new Date(rawEndDate), CONFIG.TIMEZONE, 'yyyy-MM-dd');
+
+      // Filter by student if specified
+      if (targetStudentId && studentId.toLowerCase() !== targetStudentId.toLowerCase()) {
+        continue;
+      }
+
+      // Do not recreate past-due historical activities if they don't already have an event
+      if (endDate < todayPkt && !existingEventId) {
+        continue;
+      }
+
+      // Skip cancelled items
+      if (status === 'cancelled') {
+        if (existingEventId) {
+          try {
+            var ev = cal.getEventById(existingEventId);
+            if (ev) ev.deleteEvent();
+            sheet.getRange(i + 1, 20).setValue('');
+          } catch (e) {}
+        }
+        continue;
+      }
+
+      try {
+        var hadPriorEvent = !!existingEventId;
+        syncActivityToGoogleCalendar(cal, row, i + 1, sheet);
+        if (hadPriorEvent) {
+          updatedCount++;
+        } else {
+          syncedCount++;
+        }
+      } catch (err) {
+        console.error('[Calendar Sync] Error syncing row ' + (i + 1) + ':', err);
+        errorCount++;
+      }
+    }
+
+    return {
+      status: 'success',
+      calendarName: cal.getName(),
+      created: syncedCount,
+      updated: updatedCount,
+      errors: errorCount,
+      totalSynced: syncedCount + updatedCount
+    };
+  }
+
+  /**
+   * UI Menu handler: Synchronize all deadlines to Google Calendar
+   */
+  function syncAllActivitiesFromMenu() {
+    var ui = SpreadsheetApp.getUi();
+    try {
+      var res = syncAllActivitiesToGoogleCalendar();
+      ui.alert(
+        '📅 Google Calendar Synced!',
+        'Calendar Name: ' + res.calendarName + '\n' +
+        'Events Created: ' + res.created + '\n' +
+        'Events Updated: ' + res.updated + '\n' +
+        (res.errors > 0 ? ('Errors: ' + res.errors + '\n') : '') +
+        '\nOpen Google Calendar on your phone or computer to see your deadlines!',
+        ui.ButtonSet.OK
+      );
+    } catch (err) {
+      ui.alert('Calendar Sync Error', 'Could not sync to Google Calendar:\n' + err.toString(), ui.ButtonSet.OK);
+    }
+  }
+
+  /**
+   * Generates a standard RFC 5545 iCalendar (.ics) string from active sheet deadlines.
+   * Can be imported into Apple Calendar, Outlook, and Android calendar applications.
+   */
+  function generateIcsFeed(targetStudentId) {
+    var sheet = getOrCreateActivitiesSheet();
+    var data = sheet.getDataRange().getValues();
+    var now = new Date();
+    var nowUtc = Utilities.formatDate(now, 'UTC', "yyyyMMdd'T'HHmmss'Z'");
+
+    var lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//VULMS Smart Deadline Tracker//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:🎓 VULMS Deadlines',
+      'X-WR-TIMEZONE:Asia/Karachi',
+      'BEGIN:VTIMEZONE',
+      'TZID:Asia/Karachi',
+      'X-LIC-LOCATION:Asia/Karachi',
+      'BEGIN:STANDARD',
+      'TZOFFSETFROM:+0500',
+      'TZOFFSETTO:+0500',
+      'TZNAME:PKT',
+      'DTSTART:19700101T000000',
+      'END:STANDARD',
+      'END:VTIMEZONE'
+    ];
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var studentId = String(row[0] || '').trim();
+      var actKey = String(row[1] || ('vulms_act_' + i)).trim();
+      var courseCode = String(row[3] || 'VU Course').trim();
+      var courseName = String(row[4] || '').trim();
+      var activityTitle = String(row[5] || 'Activity').trim();
+      var activityType = String(row[6] || 'Assignment').trim();
+      var rawEndDate = row[8];
+      var activityUrl = String(row[9] || 'https://vulms.vu.edu.pk').trim();
+      var status = String(row[10] || 'active').trim();
+
+      if (!rawEndDate || status === 'cancelled') continue;
+
+      if (targetStudentId && studentId.toLowerCase() !== targetStudentId.toLowerCase()) {
+        continue;
+      }
+
+      var endDateStr = Utilities.formatDate(new Date(rawEndDate), CONFIG.TIMEZONE, 'yyyyMMdd');
+      var nextDay = new Date(new Date(rawEndDate).getTime() + 24 * 60 * 60 * 1000);
+      var nextDayStr = Utilities.formatDate(nextDay, CONFIG.TIMEZONE, 'yyyyMMdd');
+
+      var summary = '[' + courseCode + '] ' + activityType + ': ' + activityTitle;
+      var cleanSummary = summary.replace(/[,;\\]/g, '\\$&');
+
+      var descText = 'Course: ' + (courseName ? (courseCode + ' - ' + courseName) : courseCode) +
+                     '\\nActivity: ' + activityTitle +
+                     '\\nType: ' + activityType +
+                     '\\nDue: ' + Utilities.formatDate(new Date(rawEndDate), CONFIG.TIMEZONE, 'yyyy-MM-dd') + ' 11:59 PM PKT' +
+                     '\\nSubmission Link: ' + activityUrl +
+                     '\\n\\nAuto-synced by VULMS Smart Deadline Tracker';
+
+      lines.push('BEGIN:VEVENT');
+      lines.push('UID:' + actKey + '@vulms-tracker');
+      lines.push('DTSTAMP:' + nowUtc);
+      lines.push('DTSTART;VALUE=DATE:' + endDateStr);
+      lines.push('DTEND;VALUE=DATE:' + nextDayStr);
+      lines.push('SUMMARY:' + cleanSummary);
+      lines.push('DESCRIPTION:' + descText);
+      lines.push('URL:' + activityUrl);
+      lines.push('STATUS:CONFIRMED');
+
+      // Native Alarm on day of deadline
+      lines.push('BEGIN:VALARM');
+      lines.push('TRIGGER:-PT9H');
+      lines.push('ACTION:DISPLAY');
+      lines.push('DESCRIPTION:VULMS Deadline Alert: ' + cleanSummary);
+      lines.push('END:VALARM');
+
+      lines.push('END:VEVENT');
+    }
+
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
+  }
+
+  /**
+   * UI Menu handler: Shows modal with student's iCal / Apple Calendar subscription URL
+   */
+  function showIcalFeedUrlDialog() {
+    var ui = SpreadsheetApp.getUi();
+    var webAppUrl = '';
+    try {
+      webAppUrl = ScriptApp.getService().getUrl();
+    } catch (e) {}
+
+    var feedUrl = (webAppUrl && webAppUrl.startsWith('https://')) ?
+      (webAppUrl + '?feed=ical') :
+      'Please deploy your script as a Web App first (Deploy > New deployment > Web app).';
+
+    var webcalUrl = (webAppUrl && webAppUrl.startsWith('https://')) ?
+      feedUrl.replace('https://', 'webcal://') :
+      '';
+
+    var htmlOutput = HtmlService.createHtmlOutput(
+      '<div style="font-family: Arial, sans-serif; padding: 12px; color: #1e293b; line-height: 1.5;">' +
+      '  <h3 style="margin-top: 0; color: #0284c7;">📅 Live Calendar Subscription Feed</h3>' +
+      '  <p style="font-size: 13px;">Copy this URL to subscribe to your deadlines in <b>Apple Calendar (iPhone / Mac)</b>, <b>Outlook</b>, or <b>Google Calendar</b>:</p>' +
+      '  <div style="background: #f1f5f9; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 11px; word-break: break-all; border: 1px solid #cbd5e1; margin-bottom: 15px;">' +
+      feedUrl +
+      '  </div>' +
+      '  <h4 style="font-size: 12px; margin-bottom: 4px; color: #334155;">📱 How to Subscribe on iPhone / iPad:</h4>' +
+      '  <ol style="font-size: 12px; padding-left: 20px; margin-top: 0;">' +
+      '    <li>Open <b>Settings</b> &gt; <b>Calendar</b> &gt; <b>Accounts</b></li>' +
+      '    <li>Tap <b>Add Account</b> &gt; <b>Other</b> &gt; <b>Add Subscribed Calendar</b></li>' +
+      '    <li>Paste the URL above and tap <b>Next</b> &gt; <b>Save</b>!</li>' +
+      '  </ol>' +
+      '  <h4 style="font-size: 12px; margin-bottom: 4px; color: #334155;">💻 How to Subscribe in Outlook:</h4>' +
+      '  <ol style="font-size: 12px; padding-left: 20px; margin-top: 0;">' +
+      '    <li>Open Outlook Calendar &gt; <b>Add Calendar</b> &gt; <b>Subscribe from web</b></li>' +
+      '    <li>Paste the URL above, name it <i>VULMS Deadlines</i>, and click <b>Import</b>!</li>' +
+      '  </ol>' +
+      '</div>'
+    ).setWidth(520).setHeight(380);
+
+    ui.showModalDialog(htmlOutput, '🔗 Calendar Subscription Link');
   }
 
