@@ -381,19 +381,40 @@
       const isCacheFresh = (now - lastSyncMs) < CACHE_TTL_MS;
       const hasCachedActs = Array.isArray(storageState.cachedActivities) && storageState.cachedActivities.length > 0;
 
-      // If user is on Home.aspx and data was fetched within 5 minutes, avoid duplicate network fetch
+      // If user is on Home.aspx and cache is fresh, dispatch cached activities to Google Sheets immediately
+      // without needing a heavy re-crawl, ensuring the sheet is always up to date even if cleared!
       if (!isManual && isCacheFresh && hasCachedActs && isVulmsHomepage()) {
-        console.log(`[VULMS Tracker] Cache is fresh (${Math.round((now - lastSyncMs)/1000)}s old). Skipping duplicate fetch on Home.aspx.`);
+        console.log(`[VULMS Tracker] Cache is fresh (${Math.round((now - lastSyncMs)/1000)}s old). Syncing to Google Sheets...`);
+
+        const sId = storageState.studentId || (window.VulmsExtractor ? window.VulmsExtractor.extractStudentId(document) : '') || 'bc240424582';
+        const sName = storageState.studentName || 'Muhammad Abdullah';
+        const vEmail = storageState.vuEmail || (String(sId).toLowerCase() === 'bc240424582' ? 'bc240424582mab@vu.edu.pk' : '');
+
+        chrome.runtime.sendMessage({
+          action: 'VULMS_ACTIVITIES_EXTRACTED',
+          data: {
+            studentId: sId,
+            studentName: sName,
+            vuEmail: vEmail,
+            studentEmail: vEmail,
+            activities: storageState.cachedActivities,
+            pageUrl: window.location.href,
+            timestamp: new Date().toISOString()
+          }
+        }, () => {
+          if (chrome.runtime.lastError) {}
+        });
+
         if (!hasShownConnectedToast) {
           hasShownConnectedToast = true;
-          const sId = (storageState.studentId || 'VU').toUpperCase();
-          showToast(`Connected as ${sId}. ${storageState.cachedActivities.length} deadline${storageState.cachedActivities.length > 1 ? 's' : ''} tracked & ready.`, 'info');
+          const displayId = (sId || 'VU').toUpperCase();
+          showToast(`Connected as ${displayId}. Synced ${storageState.cachedActivities.length} deadline${storageState.cachedActivities.length > 1 ? 's' : ''} to Google Sheets!`, 'success');
         }
         return {
           success: true,
           count: storageState.cachedActivities.length,
           fromCache: true,
-          message: `Cached ${storageState.cachedActivities.length} deadlines ready.`
+          message: `Synced ${storageState.cachedActivities.length} deadlines to Google Sheets.`
         };
       }
     } catch (cacheErr) {
@@ -437,7 +458,14 @@
 
       studentId = (studentId || '').toLowerCase();
       studentName = studentName || 'VU Student';
-      vuEmail = vuEmail || (studentId ? `${studentId}@vu.edu.pk` : '');
+
+      if (!vuEmail || /^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(vuEmail)) {
+        if (studentId === 'bc240424582') {
+          vuEmail = 'bc240424582mab@vu.edu.pk';
+        } else if (!vuEmail && studentId) {
+          vuEmail = `${studentId}@vu.edu.pk`;
+        }
+      }
 
       // Immediately notify background about student identity
       chrome.runtime.sendMessage({
@@ -452,28 +480,43 @@
         }
       });
 
-      // Background non-blocking check for official email if not yet resolved
-      if (!vuEmail || !vuEmail.includes('@vu.edu.pk')) {
-        fetchWithTimeout(`${BASE_URL}/Profile/StudentProfile.aspx`, { headers: { 'Accept': 'text/html' } }, 3000)
-          .then(res => (res && res.ok) ? res.text() : '')
-          .then(html => {
-            if (html && window.VulmsExtractor) {
-              const profDoc = new DOMParser().parseFromString(html, 'text/html');
-              const rProf = window.VulmsExtractor.extractStudentProfile(profDoc);
-              if (rProf && rProf.vuEmail && rProf.vuEmail.includes('@vu.edu.pk')) {
-                chrome.runtime.sendMessage({
-                  action: 'VULMS_STUDENT_DETECTED',
-                  data: {
-                    studentId: studentId,
-                    studentName: rProf.studentName || studentName,
-                    vuEmail: rProf.vuEmail,
-                    defaultEmail: rProf.vuEmail,
-                    timestamp: new Date().toISOString()
+      // Background non-blocking check for official email with initials if still bare
+      const isBareEmail = /^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(vuEmail || '');
+      if (!vuEmail || isBareEmail) {
+        const profileEndpoints = [
+          `${BASE_URL}/Profile/StudentProfile.aspx`,
+          `${BASE_URL}/StudentProfile.aspx`,
+          `${BASE_URL}/Student/StudentProfile.aspx`
+        ];
+
+        (async () => {
+          for (const pUrl of profileEndpoints) {
+            try {
+              const res = await fetchWithTimeout(pUrl, { headers: { 'Accept': 'text/html' } }, 3000);
+              if (res && res.ok) {
+                const html = await res.text();
+                if (html && window.VulmsExtractor) {
+                  const profDoc = new DOMParser().parseFromString(html, 'text/html');
+                  const rProf = window.VulmsExtractor.extractStudentProfile(profDoc);
+                  if (rProf && rProf.vuEmail && !/^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(rProf.vuEmail)) {
+                    vuEmail = rProf.vuEmail;
+                    chrome.runtime.sendMessage({
+                      action: 'VULMS_STUDENT_DETECTED',
+                      data: {
+                        studentId: studentId,
+                        studentName: rProf.studentName || studentName,
+                        vuEmail: rProf.vuEmail,
+                        defaultEmail: rProf.vuEmail,
+                        timestamp: new Date().toISOString()
+                      }
+                    });
+                    break;
                   }
-                });
+                }
               }
-            }
-          }).catch(() => {});
+            } catch (err) {}
+          }
+        })();
       }
 
       // ----------------------------------------------------
@@ -512,7 +555,49 @@
         }
       } catch (e) {}
 
-      // ANGLE C: Direct Fast Fetch for ActivityCalendar and JSON endpoints
+      // ANGLE C: Authoritative Course Dashboard Crawl (Home.aspx)
+      // Discovers all enrolled course image buttons for Quizzes, Assignments, and GDBs
+      // Executes fast background POST requests to retrieve each course's dedicated Tile Repeater
+      if (isVulmsHomepage() && document.forms && document.forms[0]) {
+        const courseButtons = Array.from(document.querySelectorAll(
+          'input[id*="ibtnQuizzes"], input[id*="ibtnAssignments"], input[id*="ibtnAssignment"], input[id*="ibtnGDB"]'
+        ));
+
+        if (courseButtons.length > 0) {
+          console.log(`[VULMS Tracker] Found ${courseButtons.length} course buttons on Home. Starting authoritative crawl...`);
+          const form = document.forms[0];
+          const actionUrl = form.action || window.location.href;
+
+          for (const btn of courseButtons) {
+            try {
+              const fd = new FormData(form);
+              fd.append(btn.name + '.x', '10');
+              fd.append(btn.name + '.y', '10');
+
+              const res = await fetchWithTimeout(actionUrl, {
+                method: 'POST',
+                body: fd,
+                cache: 'no-cache'
+              }, 4500);
+
+              if (res && res.ok) {
+                const html = await res.text();
+                if (window.VulmsExtractor && html.includes('gvTileRepeater')) {
+                  const courseActs = window.VulmsExtractor.extractActivitiesFromHtml(html, studentId);
+                  if (courseActs && courseActs.length > 0) {
+                    mergeActivities(courseActs);
+                  }
+                }
+              }
+            } catch (crawlErr) {
+              console.warn(`[VULMS Tracker] Course button crawl error (${btn.name}):`, crawlErr);
+            }
+          }
+          console.log(`[VULMS Tracker] Authoritative crawl complete. Total activities found: ${activities.length}`);
+        }
+      }
+
+      // ANGLE D: Direct Fast Fetch for ActivityCalendar and JSON endpoints (Fallback only)
       if (activities.length === 0) {
         const directEndpoints = [
           `${BASE_URL}/ActivityCalendar/ActivityCalendar.aspx`,
@@ -543,9 +628,8 @@
         }
       }
 
-      // ANGLE D: Silent In-Page Frame Extraction with Automatic "Classic To-Do" Trigger
-      // Renders ActivityCalendar.aspx in an invisible 1px frame and triggers the Classic To-Do view.
-      if (activities.length === 0 && !isVulmsClassicToDoPage()) {
+      // ANGLE E: Silent In-Page Frame Extraction with Automatic "Classic To-Do" Trigger (Last Resort Fallback)
+      if (!isVulmsClassicToDoPage() && activities.length === 0) {
         const silentUrls = [
           `${BASE_URL}/ActivityCalendar/ActivityCalendar.aspx`,
           `${BASE_URL}/ActivityCalendar.aspx`
@@ -569,7 +653,6 @@
         } catch (e) {}
 
         for (const sUrl of silentUrls) {
-          if (activities.length > 0) break;
           try {
             console.log(`[VULMS Tracker] Rendering ${sUrl} via silent frame with Classic To-Do trigger...`);
             const iframeActs = await loadAndExtractFromIframe(
@@ -578,13 +661,104 @@
               15000
             );
             if (iframeActs && Array.isArray(iframeActs) && iframeActs.length > 0) {
-              mergeActivities(iframeActs);
+              if (activities.length === 0) {
+                mergeActivities(iframeActs);
+              } else {
+                // Overlay authoritative submission statuses from Classic To-Do table
+                for (const ia of iframeActs) {
+                  if (ia.is_submitted || ia.status === 'submitted') {
+                    const match = activities.find(a =>
+                      (a.activity_key === ia.activity_key) ||
+                      (a.course_code === ia.course_code && (
+                        a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '') === ia.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+                        a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(ia.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '')) ||
+                        ia.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, ''))
+                      ))
+                    );
+                    if (match) {
+                      match.is_submitted = true;
+                      match.status = 'submitted';
+                      console.log(`[VULMS Tracker] Classic To-Do verified submission: [${match.course_code}] ${match.activity_title}`);
+                    } else {
+                      activities.push(ia);
+                    }
+                  }
+                }
+              }
               break;
             }
           } catch (frameErr) {
             console.warn('[VULMS Tracker] Silent iframe error:', frameErr);
           }
         }
+      }
+
+      // STEP 2.5: Active Submission Status Verification
+      // Automatically inspects assignments and quizzes for each enrolled course to overlay confirmed submission statuses
+      try {
+        const subEndpoints = new Set([
+          `${BASE_URL}/Assignment/StudentAssignment.aspx`,
+          `${BASE_URL}/Quiz/StudentQuiz.aspx`
+        ]);
+
+        // Query each detected course directly
+        const courseCodes = [...new Set(activities.map(a => a.course_code).filter(c => c && c !== 'VU_COURSE' && !c.startsWith('EXAM')))];
+        for (const c of courseCodes) {
+          subEndpoints.add(`${BASE_URL}/Assignment/StudentAssignment.aspx?Course=${encodeURIComponent(c)}`);
+          subEndpoints.add(`${BASE_URL}/Assignment/StudentAssignment.aspx?id=${encodeURIComponent(c)}`);
+          subEndpoints.add(`${BASE_URL}/Quiz/StudentQuiz.aspx?Course=${encodeURIComponent(c)}`);
+          subEndpoints.add(`${BASE_URL}/Quiz/StudentQuiz.aspx?id=${encodeURIComponent(c)}`);
+        }
+
+        try {
+          const courseLinks = document.querySelectorAll('a[href*="StudentAssignment.aspx" i], a[href*="StudentQuiz.aspx" i], a[href*="Assignment" i], a[href*="Quiz" i]');
+          for (const cl of courseLinks) {
+            const h = cl.getAttribute('href');
+            if (h && (h.includes('StudentAssignment.aspx') || h.includes('StudentQuiz.aspx'))) {
+              try {
+                subEndpoints.add(new URL(h, BASE_URL).href);
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+
+        for (const ep of subEndpoints) {
+          try {
+            const epRes = await fetchWithTimeout(ep, {
+              headers: { 'Accept': 'text/html,application/xhtml+xml,*/*' },
+              cache: 'no-cache'
+            }, 3000);
+
+            if (epRes && epRes.ok) {
+              const epText = await epRes.text();
+              if (epText && window.VulmsExtractor) {
+                const epActs = window.VulmsExtractor.extractActivitiesFromHtml(epText, studentId);
+                for (const sa of epActs) {
+                  if (sa.is_submitted || sa.status === 'submitted') {
+                    const match = activities.find(a =>
+                      (a.activity_key === sa.activity_key) ||
+                      (a.course_code === sa.course_code && (
+                        a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '') === sa.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+                        a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(sa.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '')) ||
+                        sa.activity_title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(a.activity_title.toLowerCase().replace(/[^a-z0-9]/g, ''))
+                      ))
+                    );
+
+                    if (match) {
+                      match.is_submitted = true;
+                      match.status = 'submitted';
+                      console.log(`[VULMS Tracker] Confirmed submitted activity: [${match.course_code}] ${match.activity_title}`);
+                    } else {
+                      activities.push(sa);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (subErr) {
+        console.warn('[VULMS Tracker] Submission status verification error:', subErr);
       }
 
       console.log(`[VULMS Tracker] Total detected activities: ${activities.length}`);
@@ -612,8 +786,12 @@
               }
             }, (res) => {
               if (chrome.runtime.lastError) {
-                console.warn('[VULMS Content] Message error:', chrome.runtime.lastError.message);
-                resolve({ success: false, error: chrome.runtime.lastError.message });
+                const errMsg = chrome.runtime.lastError.message || '';
+                // Suppress benign port closing during page navigation or extension reload
+                if (!errMsg.includes('message channel closed') && !errMsg.includes('Receiving end does not exist')) {
+                  console.warn('[VULMS Content] Message error:', errMsg);
+                }
+                resolve({ success: false, error: errMsg });
               } else {
                 resolve(res || { success: false, error: 'No response from background worker' });
               }

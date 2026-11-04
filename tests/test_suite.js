@@ -63,6 +63,25 @@ assert(extractor.extractActivityIdFromUrl('https://vulms.vu.edu.pk/CourseHome.as
 assert(extractor.extractActivityIdFromUrl('https://vulms.vu.edu.pk/Quiz/Start.aspx?id=8831') === '8831', 'Extracts valid numerical activity ID 8831');
 
 // ----------------------------------------------------
+// Section 2C: Activity Title Normalization & Submission Status
+// ----------------------------------------------------
+console.log('\n[2C] Activity Title Normalization & Submission Status:');
+assert(extractor.normalizeActivityTitle('CS301 Assignment No 1', 'CS301') === 'Assignment 1', 'Normalizes FullCalendar "CS301 Assignment No 1" to "Assignment 1"');
+assert(extractor.normalizeActivityTitle('Assignment No. 1', 'CS301') === 'Assignment 1', 'Normalizes Classic To-Do "Assignment No. 1" to "Assignment 1"');
+assert(extractor.normalizeActivityTitle('Online Quiz 1', 'CS301') === 'Quiz 1', 'Normalizes "Online Quiz 1" to "Quiz 1"');
+assert(extractor.normalizeActivityTitle('Quiz # 01', 'CS301') === 'Quiz 1', 'Normalizes "Quiz # 01" to "Quiz 1"');
+assert(extractor.normalizeActivityTitle('Graded Discussion Board (GDB) No. 1', 'CS301') === 'GDB 1', 'Normalizes "Graded Discussion Board (GDB) No. 1" to "GDB 1"');
+assert(extractor.checkSubmissionStatus('Submitted on 02-Nov-2026', '', '') === true, 'Detects "Submitted on 02-Nov-2026"');
+assert(extractor.checkSubmissionStatus('Status: Attempted', '', '') === true, 'Detects "Status: Attempted"');
+assert(extractor.checkSubmissionStatus('Status: Not Submitted', '', '') === false, 'Rejects "Status: Not Submitted"');
+assert(extractor.checkSubmissionStatus('', 'https://vulms.vu.edu.pk/downloadsubmission.aspx?id=1', 'View Submission') === true, 'Detects "View Submission" link');
+
+// Bridge FullCalendar and Classic To-Do Deterministic Keys
+const fcKey = extractor.generateActivityKey('bc240424582', 'CS301', 'Assignment', 'CS301 Assignment No 1', '');
+const tdKey = extractor.generateActivityKey('bc240424582', 'CS301', 'Assignment', 'Assignment No. 1', '');
+assert(fcKey === tdKey, 'FullCalendar and Classic To-Do produce IDENTICAL deterministic activity keys', `${fcKey} vs ${tdKey}`);
+
+// ----------------------------------------------------
 // Section 2B: Official VU Email & Student Profile Tests
 // ----------------------------------------------------
 console.log('\n[2B] Official VU Email & Student Name Validation:');
@@ -125,24 +144,44 @@ class MockDatabase {
     let skipped = 0;
 
     for (const item of payload.activities) {
-      const existing = this.rows.find(r => r.activity_key === item.activity_key);
+      function extractNum(title) {
+        const m = String(title || '').match(/(?:assignment|quiz|gdb|task)\s*(?:no\.?|#)?\s*0*(\d+)/i);
+        return m ? m[1] : '';
+      }
+      const actNum = extractNum(item.activity_title);
+      const existing = this.rows.find(r =>
+        r.activity_key === item.activity_key ||
+        (r.student_id === payload.studentId && r.course_code === item.course_code && extractNum(r.activity_title) === actNum && actNum)
+      );
 
       if (!existing) {
         // Ingestion-time check
         const isPast = item.end_date < todayPkt;
+        const isSub = item.status === 'submitted' || item.is_submitted;
         this.rows.push({
           student_id: payload.studentId,
           activity_key: item.activity_key,
           course_code: item.course_code,
+          activity_type: item.activity_type || 'Assignment',
           activity_title: item.activity_title,
           end_date: item.end_date,
-          status: isPast ? 'overdue' : 'active',
-          reminder_status: isPast ? 'skipped_past_deadline' : 'pending',
+          status: isSub ? 'submitted' : (isPast ? 'overdue' : 'active'),
+          reminder_status: isSub ? 'completed' : (isPast ? 'skipped_past_deadline' : 'pending'),
           reminder_sent_at: null
         });
         inserted++;
       } else {
-        if (item.end_date !== existing.end_date) {
+        const isSub = (item.status === 'submitted' || item.is_submitted);
+        if (isSub) {
+          if (existing.status !== 'submitted') {
+            existing.status = 'submitted';
+            existing.reminder_status = 'completed';
+            existing.activity_key = item.activity_key;
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else if (item.end_date !== existing.end_date) {
           const wasSent = existing.reminder_status === 'sent';
           existing.end_date = item.end_date;
           existing.status = 'active';
@@ -154,7 +193,67 @@ class MockDatabase {
       }
     }
 
+    // Reconciliation: detect tasks removed from VULMS To-Do list
+    if (payload.activities.length > 0) {
+      function extractNum(title) {
+        const m = String(title || '').match(/(?:assignment|quiz|gdb|task)\s*(?:no\.?|#)?\s*0*(\d+)/i);
+        return m ? m[1] : '';
+      }
+      for (const row of this.rows) {
+        if (row.status === 'active' && row.student_id === payload.studentId) {
+          const inPayload = payload.activities.some(it =>
+            it.activity_key === row.activity_key ||
+            (it.course_code === row.course_code && extractNum(it.activity_title) === extractNum(row.activity_title))
+          );
+          if (!inPayload) {
+            const isFuture = row.end_date >= todayPkt;
+            row.status = isFuture ? 'submitted' : 'overdue';
+            row.reminder_status = isFuture ? 'completed' : 'skipped_past_deadline';
+            updated++;
+          }
+        }
+      }
+    }
+
     return { inserted, updated, skipped, total: this.rows.length };
+  }
+
+  deduplicate(targetStudentId) {
+    function extractNum(title) {
+      const m = String(title || '').match(/(?:assignment|quiz|gdb|task)\s*(?:no\.?|#)?\s*0*(\d+)/i);
+      return m ? m[1] : '';
+    }
+    const seen = new Map();
+    const toKeep = [];
+    let removed = 0;
+
+    for (const r of this.rows) {
+      if (targetStudentId && r.student_id !== targetStudentId && r.student_id !== 'unassigned') {
+        toKeep.push(r);
+        continue;
+      }
+      const num = extractNum(r.activity_title);
+      const normT = (r.activity_title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const actIdent = num ? ('num_' + num) : ('title_' + normT);
+      const identityKey = (r.course_code || '').toUpperCase() + '_' + (r.activity_type || 'Activity').toLowerCase() + '_' + actIdent;
+
+      if (seen.has(identityKey)) {
+        const primary = seen.get(identityKey);
+        if (r.status === 'submitted') {
+          primary.status = 'submitted';
+          primary.reminder_status = 'completed';
+        }
+        if ((!primary.student_id || primary.student_id === 'unassigned') && r.student_id && r.student_id !== 'unassigned') {
+          primary.student_id = r.student_id;
+        }
+        removed++;
+      } else {
+        seen.set(identityKey, r);
+        toKeep.push(r);
+      }
+    }
+    this.rows = toKeep;
+    return { removed, kept: this.rows.length };
   }
 
   runHourlyTrigger(pktDate, pktHour) {
@@ -235,6 +334,74 @@ const testItemStudentB = {
 };
 const resH = db.sync({ studentId: studentB, activities: [testItemStudentB] });
 assert(resH.inserted === 1 && db.rows.filter(r => r.student_id === studentB).length === 1, 'Test H: Student A and Student B data strictly isolated');
+
+// Test K: Submission status update via secondary fuzzy index
+const testItemK = {
+  activity_key: extractor.generateActivityKey(studentA, 'MTH101', 'Assignment', 'Assignment 1', ''),
+  course_code: 'MTH101',
+  activity_title: 'Assignment 1',
+  end_date: '2026-11-20',
+  status: 'active'
+};
+db.sync({ studentId: studentA, activities: [testItemK] });
+
+const submittedItem = {
+  activity_key: extractor.generateActivityKey(studentA, 'MTH101', 'Assignment', 'MTH101 Assignment No 1', ''),
+  course_code: 'MTH101',
+  activity_title: 'Assignment No. 1',
+  end_date: '2026-11-20',
+  is_submitted: true,
+  status: 'submitted'
+};
+const resK = db.sync({ studentId: studentA, activities: [submittedItem] });
+const mthRow = db.rows.find(r => r.course_code === 'MTH101');
+assert(resK.updated >= 1 && mthRow.status === 'submitted' && mthRow.reminder_status === 'completed', 'Test K: Activity submission automatically flips status to submitted and completes reminder');
+
+const completedNoonRun = db.runHourlyTrigger('2026-11-10', 12);
+assert(completedNoonRun === 0, 'Test K2: Submitted item suppresses reminder email on deadline day (0 emails sent)');
+
+// Test L: Task removed from VULMS To-Do Calendar (User completed it)
+// Insert an active quiz for studentA
+const activeQuiz = {
+  activity_key: extractor.generateActivityKey(studentA, 'CS301', 'Quiz', 'Quiz 1', ''),
+  course_code: 'CS301',
+  activity_title: 'Quiz 1',
+  end_date: '2026-11-15',
+  status: 'active'
+};
+db.sync({ studentId: studentA, activities: [activeQuiz] });
+assert(db.rows.find(r => r.course_code === 'CS301').status === 'active', 'Test L1: CS301 Quiz 1 initially inserted as active');
+
+// Next sync: VULMS removed CS301 Quiz 1 because student attempted it (payload only has another task)
+const remainingTask = {
+  activity_key: extractor.generateActivityKey(studentA, 'CS201', 'Assignment', 'Assignment 2', ''),
+  course_code: 'CS201',
+  activity_title: 'Assignment 2',
+  end_date: '2026-11-20',
+  status: 'active'
+};
+db.sync({ studentId: studentA, activities: [remainingTask] });
+const reconciledQuiz = db.rows.find(r => r.course_code === 'CS301');
+assert(reconciledQuiz.status === 'submitted' && reconciledQuiz.reminder_status === 'completed', 'Test L2: Active task missing from VULMS To-Do calendar automatically reconciles to submitted');
+
+// Test L3: Deduplication removes redundant rows from earlier key variations
+const initialRowsCount = db.rows.length;
+db.rows.push({
+  activity_key: 'unassigned_legacy_key_123',
+  student_id: 'unassigned',
+  course_code: 'CS201',
+  activity_type: 'Assignment',
+  activity_title: 'Assignment No. 2',
+  end_date: '2026-11-20',
+  status: 'submitted',
+  reminder_status: 'completed'
+});
+assert(db.rows.length === initialRowsCount + 1, 'Test L3a: Duplicate legacy row inserted for simulation');
+const dedupRes = db.deduplicate(studentA);
+assert(dedupRes.removed === 1, 'Test L3b: Exactly 1 duplicate row purged during deduplication');
+const survivingCs201 = db.rows.find(r => r.course_code === 'CS201');
+assert(survivingCs201.status === 'submitted', 'Test L3c: Surviving row inherited submitted status from duplicate');
+assert(survivingCs201.student_id === studentA, 'Test L3d: Surviving row preserved verified student ID');
 
 // ----------------------------------------------------
 // Section 5: Real-World VULMS DOM Extraction Acceptance Test
@@ -713,7 +880,7 @@ assert(icsOutput.includes('BEGIN:VTIMEZONE') && icsOutput.includes('TZOFFSETTO:+
 assert(icsOutput.includes('DTSTART;VALUE=DATE:20261110'), 'Event start time set to All-Day date');
 assert(icsOutput.includes('DTEND;VALUE=DATE:20261111'), 'Event end time set to inclusive next-day date');
 assert(icsOutput.includes('SUMMARY:[CS101] Assignment: Assignment No. 1\\, Fundamentals'), 'Escapes commas in SUMMARY per RFC 5545');
-assert(icsOutput.includes('TRIGGER:-PT9H'), 'Native alarm VALARM set for morning on deadline day');
+assert(icsOutput.includes('TRIGGER;RELATED=END:-PT2H'), 'Native alarm VALARM set for 10:00 PM on deadline day');
 assert(icsOutput.includes('UID:bc190200111_CS101_Assignment_1@vu.edu.pk'), 'Deterministic UID generation matches student activity key');
 
 // ----------------------------------------------------
@@ -796,6 +963,125 @@ const updateRes = mockCalSync.extendDeadline('bc190200111_CS101_A1', '2026-11-11
 assert(updateRes.action === 'updated' && updateRes.eventId === evtId1, 'Deadline extension updates existing calendar event');
 assert(mockCalSync.events.size === 1, 'Extension produced 0 duplicate calendar events');
 assert(mockCalSync.events.get(evtId1).endDate === '2026-11-11', 'Calendar event date updated to new extended date');
+
+// Paired All-Day + 10:00 PM Alarm Calendar Verification:
+class MockPairedCalendarSync {
+  constructor() {
+    this.events = new Map();
+  }
+
+  syncActivity(row) {
+    const isSubmitted = (row.status === 'submitted');
+    const existingCalId = row.calId || '';
+
+    if (isSubmitted) {
+      if (existingCalId) {
+        const parts = existingCalId.split('|');
+        for (const id of parts) {
+          if (id) this.events.delete(id.trim());
+        }
+        row.calId = '';
+      }
+      return null;
+    }
+
+    const allDayId = (existingCalId.split('|')[0] || '').trim() || 'cal_allday_101';
+    const alarmId = (existingCalId.split('|')[1] || '').trim() || 'cal_alarm_102';
+
+    // All-Day Banner: 0 reminders (no premature noise before 10 PM)
+    this.events.set(allDayId, {
+      type: 'all-day',
+      title: `[${row.course}] ${row.type}: ${row.title}`,
+      date: row.endDate,
+      reminders: []
+    });
+
+    // 10:00 PM Alarm Event: exact popup at 22:00 PKT
+    this.events.set(alarmId, {
+      type: 'timed-alarm',
+      title: `⏰ [${row.course}] ${row.type}: ${row.title} (Due Tonight 11:59 PM)`,
+      time: `${row.endDate} 22:00:00`,
+      reminders: [0]
+    });
+
+    row.calId = `${allDayId}|${alarmId}`;
+    return row.calId;
+  }
+}
+
+const pairedCal = new MockPairedCalendarSync();
+const testRow = {
+  course: 'CS301',
+  type: 'Assignment',
+  title: 'Assignment 1',
+  endDate: '2026-11-04',
+  status: 'active',
+  calId: ''
+};
+
+const savedIds = pairedCal.syncActivity(testRow);
+assert(savedIds === 'cal_allday_101|cal_alarm_102', 'Paired calendar sync produces allDayId|alarmId composite key');
+assert(pairedCal.events.size === 2, 'Creates both all-day banner event and 10:00 PM alarm event');
+assert(pairedCal.events.get('cal_allday_101').reminders.length === 0, 'All-Day banner event has 0 reminders (silent before 10 PM)');
+assert(pairedCal.events.get('cal_alarm_102').reminders[0] === 0, 'Evening alarm event has popup reminder at exact 10:00 PM start');
+
+// Test immediate deletion upon submission:
+testRow.status = 'submitted';
+pairedCal.syncActivity(testRow);
+assert(pairedCal.events.size === 0, 'Submitting activity immediately purges BOTH calendar events');
+assert(testRow.calId === '', 'Calendar ID cleared from row upon submission');
+
+// ----------------------------------------------------
+console.log('\n[16] ASP.NET Tile Repeater Extraction (Authoritative Quizzes & Assignments):');
+const sampleQuizHtml = `
+  <h3 class="m-subheader__title ">CS403 - Database Management Systems             </h3>
+  <div id="MainContent_gvTileRepeaterQuiz_pnl_0">
+    <span id="MainContent_gvTileRepeaterQuiz_lblTitle_0">Quiz No 1</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblStartDate_0" style="color:Green;">Nov 09, 2026 12:00 AM</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblEndDate_0" style="color:Red;">Nov 11, 2026 11:59 PM</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblTotalMarks_0">10</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblSubmitted_0"><span style="color: Blue;">-</span></span>
+  </div>
+  <div id="MainContent_gvTileRepeaterQuiz_pnl_1">
+    <span id="MainContent_gvTileRepeaterQuiz_lblTitle_1">Quiz No 2</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblStartDate_1" style="color:Green;">Nov 23, 2026 12:00 AM</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblEndDate_1" style="color:Red;">Nov 25, 2026 11:59 PM</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblTotalMarks_1">10</span>
+    <span id="MainContent_gvTileRepeaterQuiz_lblSubmitted_1"><span style="color: Blue;">Submitted</span></span>
+  </div>
+`;
+
+const sampleAssignHtml = `
+  <h3 class="m-subheader__title ">CS301 - Data Structures</h3>
+  <div id="MainContent_gvTileRepeaterAssignment_pnl_0">
+    <span id="MainContent_gvTileRepeaterAssignment_Label3_0" class="paraGraphtext">Assignment No. 1</span>
+    <span id="MainContent_gvTileRepeaterAssignment_lblPayableAmount_0">8. Implementation of Stack</span>
+    <span id="MainContent_gvTileRepeaterAssignment_lblDueDate_0" style="color:Red;">Nov 03, 2026</span>
+    <span id="MainContent_gvTileRepeaterAssignment_lblTotalMarks_0" style="color:Purple;">20.00</span>
+    <span id="MainContent_gvTileRepeaterAssignment_lblsubmitted_0" class="txtGreen">Submitted</span>
+    <span id="MainContent_gvTileRepeaterAssignment_lblSubmitDate_0" class="txtsmall txtNavy">Nov 02,2026 11:30 PM</span>
+  </div>
+`;
+
+const extractedQuizzes = extractor.extractActivitiesFromHtml(sampleQuizHtml, 'bc240424582');
+assert(extractedQuizzes.length === 2, 'Extracts exactly 2 quizzes from gvTileRepeaterQuiz');
+assert(extractedQuizzes[0].course_code === 'CS403', 'Quiz 1 course code resolved as CS403');
+assert(extractedQuizzes[0].activity_title === 'Quiz 1', 'Quiz 1 title normalized to Quiz 1');
+assert(extractedQuizzes[0].end_date === '2026-11-11', 'Quiz 1 end date parsed as 2026-11-11');
+assert(extractedQuizzes[0].total_marks === '10', 'Quiz 1 total marks parsed as 10');
+assert(extractedQuizzes[0].is_submitted === false, 'Quiz 1 submission status is false (pending)');
+assert(extractedQuizzes[1].is_submitted === true, 'Quiz 2 submission status is true (submitted)');
+
+const extractedAssigns = extractor.extractActivitiesFromHtml(sampleAssignHtml, 'bc240424582');
+assert(extractedAssigns.length === 1, 'Extracts exactly 1 assignment from gvTileRepeaterAssignment');
+assert(extractedAssigns[0].course_code === 'CS301', 'Assignment course code resolved as CS301');
+assert(extractedAssigns[0].activity_title === 'Assignment 1', 'Assignment title normalized to Assignment 1');
+assert(extractedAssigns[0].end_date === '2026-11-03', 'Assignment due date parsed as 2026-11-03');
+assert(extractedAssigns[0].total_marks === '20.00', 'Assignment total marks parsed as 20.00');
+assert(extractedAssigns[0].lesson_topic === '8. Implementation of Stack', 'Assignment lesson topic parsed as 8. Implementation of Stack');
+assert(extractedAssigns[0].submitted_at.includes('Nov 02,2026'), 'Assignment submitted_at parsed correctly');
+assert(extractedAssigns[0].is_submitted === true, 'Assignment submission status is true (Submitted)');
+assert(extractedAssigns[0].status === 'submitted', 'Assignment status is submitted');
 
 console.log('\n======================================================');
 console.log(`TEST SUMMARY: ${passCount} PASSED, ${failCount} FAILED`);

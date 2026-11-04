@@ -230,31 +230,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         await chrome.storage.local.remove('personalEmail');
         store.personalEmail = '';
       }
-      if (store.vuEmail && store.vuEmail.includes('bc240424582mab')) {
-        await chrome.storage.local.remove('vuEmail');
-        store.vuEmail = '';
-      }
-      if (store.studentId && store.studentId.toUpperCase() === 'BC240424582') {
-        await chrome.storage.local.remove('studentId');
-        store.studentId = '';
-      }
 
       // Clean up any system title artifacts
       let studentName = store.studentName;
       if (!studentName ||
-          studentName === 'Muhammad Abdullah' ||
           studentName.toLowerCase().includes('management') ||
           studentName.toLowerCase().includes('system') ||
           studentName.toLowerCase().includes('lms')) {
         studentName = 'VU Student';
-        if (store.studentName === 'Muhammad Abdullah') {
-          await chrome.storage.local.remove('studentName');
-        }
       }
 
       // Profile & Verified Official VU Email
       const studentId = store.studentId ? store.studentId.toUpperCase() : 'VULMS';
-      const defaultVuEmail = store.vuEmail || (store.studentId ? `${store.studentId.toLowerCase()}@vu.edu.pk` : 'student@vu.edu.pk');
+      let defaultVuEmail = store.vuEmail;
+      if (!defaultVuEmail || /^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(defaultVuEmail)) {
+        if (store.studentId && store.studentId.toLowerCase() === 'bc240424582') {
+          defaultVuEmail = 'bc240424582mab@vu.edu.pk';
+        } else if (!defaultVuEmail) {
+          defaultVuEmail = store.studentId ? `${store.studentId.toLowerCase()}@vu.edu.pk` : 'student@vu.edu.pk';
+        }
+      }
 
       if (lblStudentName) lblStudentName.textContent = studentName;
       if (lblStudentId) lblStudentId.textContent = studentId;
@@ -293,25 +288,31 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Metrics
       const activities = store.cachedActivities || [];
+      const pendingActivities = activities.filter(a => a.status !== 'submitted' && !a.is_submitted);
       if (valTotalTracked) valTotalTracked.textContent = activities.length;
       if (valPendingReminders) {
-        valPendingReminders.textContent = store.pendingRemindersCount !== undefined ? store.pendingRemindersCount : activities.length;
+        valPendingReminders.textContent = pendingActivities.length;
       }
       if (valSyncedCount) {
         valSyncedCount.textContent = store.lastSyncSummary ? (store.lastSyncSummary.inserted + store.lastSyncSummary.updated) : activities.length;
       }
 
-      // Spotlight Deadline
-      if (activities.length > 0) {
+      // Spotlight Deadline (focuses on next unsubmitted activity)
+      if (pendingActivities.length > 0) {
         const todayStr = new Date().toISOString().substring(0, 10);
-        const sorted = [...activities].sort((a, b) => (a.end_date || '').localeCompare(b.end_date || ''));
+        const sorted = [...pendingActivities].sort((a, b) => (a.end_date || '').localeCompare(b.end_date || ''));
         const nextUpcoming = sorted.find(a => a.end_date >= todayStr) || sorted[0];
 
         if (nextUpcoming) {
+          currentSpotlightKey = nextUpcoming.activity_key;
           if (emptyHeroState) emptyHeroState.style.display = 'none';
           if (spotlightCourse) {
             spotlightCourse.style.display = 'inline-block';
-            spotlightCourse.textContent = nextUpcoming.course_code || 'CS101';
+            let courseLabel = nextUpcoming.course_code || 'CS101';
+            if (nextUpcoming.total_marks) {
+              courseLabel += ` • ${nextUpcoming.total_marks} Marks`;
+            }
+            spotlightCourse.textContent = courseLabel;
           }
           if (spotlightType) {
             spotlightType.style.display = 'inline-block';
@@ -319,7 +320,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           if (spotlightTitle) {
             spotlightTitle.style.display = 'block';
-            spotlightTitle.textContent = nextUpcoming.activity_title || 'Upcoming Activity';
+            let titleText = nextUpcoming.activity_title || 'Upcoming Activity';
+            if (nextUpcoming.lesson_topic) {
+              titleText += ` (${nextUpcoming.lesson_topic})`;
+            }
+            spotlightTitle.textContent = titleText;
           }
           if (deadlineMetaRow) deadlineMetaRow.style.display = 'flex';
           if (spotlightDate) {
@@ -493,7 +498,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       const sId = (store.studentId || '').toLowerCase();
-      const defaultOfficial = store.vuEmail || (sId ? `${sId}@vu.edu.pk` : 'student@vu.edu.pk');
+      let defaultOfficial = store.vuEmail;
+      if (!defaultOfficial || /^[a-zA-Z]{2}\d{7,9}@vu\.edu\.pk$/i.test(defaultOfficial)) {
+        if (sId === 'bc240424582') {
+          defaultOfficial = 'bc240424582mab@vu.edu.pk';
+        } else if (!defaultOfficial) {
+          defaultOfficial = sId ? `${sId}@vu.edu.pk` : 'student@vu.edu.pk';
+        }
+      }
       const targetEmail = store.personalEmail || defaultOfficial;
 
       btnSendTestEmail.disabled = true;

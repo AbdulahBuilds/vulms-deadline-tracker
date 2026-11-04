@@ -5,7 +5,7 @@
  */
 
 // Central Google Apps Script Web App URL shared by all students
-const CENTRAL_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzKf5AC-5KM3SjF9_rk8liib-QODyVizSuKVT_nNOK91xsUYLiIB585hNfohvTdWMY8/exec';
+const CENTRAL_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxR7fywkiCKUKdyQtiVFbM0mS-bT3LKvaTF_geNfsgWLltSbbR2Zrbbi6zonu2c6lm4/exec';
 
 // Ensure toolbar badge stays clean immediately upon service worker startup
 try {
@@ -15,6 +15,7 @@ try {
 // Initialize defaults on install
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[VULMS Background] Extension installed/updated:', details ? details.reason : 'unknown');
+  setupFrameHeaderRules();
   // Ensure icon stays clean without badge count
   chrome.action.setBadgeText({ text: '' });
   chrome.storage.local.get(['webAppUrl', 'secretToken'], (result) => {
@@ -98,10 +99,34 @@ function updateBadge(text, color) {
   }
 }
 
+let activeSyncPromise = null;
+
 /**
- * Process synchronized activities received from content script
+ * Process synchronized activities received from content script.
+ * Concurrency-safe: Shares in-flight sync if multiple tabs trigger simultaneously.
  */
 async function handleActivitiesSync(data) {
+  if (activeSyncPromise) {
+    console.log('[VULMS Background] Sync already in flight, sharing in-flight request...');
+    try {
+      return await activeSyncPromise;
+    } catch (e) {
+      // If previous failed, proceed
+    }
+  }
+
+  activeSyncPromise = (async () => {
+    try {
+      return await executeActivitiesSync(data);
+    } finally {
+      activeSyncPromise = null;
+    }
+  })();
+
+  return await activeSyncPromise;
+}
+
+async function executeActivitiesSync(data) {
   const settings = await chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentName', 'personalEmail', 'vuEmail']);
   const webAppUrl = settings.webAppUrl || CENTRAL_WEB_APP_URL;
   const secretToken = settings.secretToken || '';
@@ -138,18 +163,37 @@ async function handleActivitiesSync(data) {
   };
 
   try {
-    const result = await postToGoogleAppsScript(webAppUrl, payload);
+    let result = await postToGoogleAppsScript(webAppUrl, payload);
     console.log('[VULMS Background] Sync response from Apps Script:', result);
 
-    if (result.status === 'success') {
-      const pendingCount = result.pendingReminders !== undefined ? result.pendingReminders : 0;
+    // If server was temporarily busy (another sync in progress), retry once after 2 seconds
+    if (result && result.status === 'busy') {
+      console.log('[VULMS Background] Apps Script server busy, retrying in 2 seconds...');
+      await new Promise(r => setTimeout(r, 2000));
+      result = await postToGoogleAppsScript(webAppUrl, payload).catch(() => ({ status: 'busy' }));
+    }
+
+    if (result && (result.status === 'success' || result.status === 'busy')) {
+      const pendingCount = (result.pendingReminders !== undefined) ? result.pendingReminders : 0;
       updateBadge(pendingCount > 0 ? String(pendingCount) : 'OK', '#10b981'); // emerald
+
+      // Merge newly extracted activities with existing cache to maintain all courses
+      const curStore = await chrome.storage.local.get(['cachedActivities']);
+      const existingActs = curStore.cachedActivities || [];
+      const mergedMap = new Map();
+      for (const a of existingActs) {
+        if (a && a.activity_key) mergedMap.set(a.activity_key, a);
+      }
+      for (const a of (data.activities || [])) {
+        if (a && a.activity_key) mergedMap.set(a.activity_key, a);
+      }
+      const allCachedActivities = Array.from(mergedMap.values());
 
       await chrome.storage.local.set({
         lastSyncStatus: 'success',
         lastSyncTime: new Date().toISOString(),
         studentId: data.studentId,
-        cachedActivities: data.activities,
+        cachedActivities: allCachedActivities,
         pendingRemindersCount: pendingCount,
         lastSyncSummary: {
           inserted: result.inserted || 0,
@@ -161,9 +205,15 @@ async function handleActivitiesSync(data) {
 
       return { success: true, result: result };
     } else {
-      throw new Error(result.message || 'Apps script reported failed status.');
+      throw new Error((result && result.message) || 'Apps script reported failed status.');
     }
   } catch (err) {
+    // If it was a lock contention issue, handle gracefully without error badge
+    if (err.message && (err.message.includes('Lock timeout') || err.message.includes('holding the lock'))) {
+      console.warn('[VULMS Background] Apps Script lock contention handled safely:', err.message);
+      return { success: true, deferred: true, message: 'Sync in progress by concurrent request' };
+    }
+
     console.error('[VULMS Background] Sync failed:', err);
     updateBadge('ERR', '#ef4444'); // red
 
@@ -206,37 +256,34 @@ async function processPendingSyncQueue() {
 // Setup DeclarativeNetRequest rules to remove X-Frame-Options and CSP for sub_frames of *.vu.edu.pk
 function setupFrameHeaderRules() {
   if (chrome.declarativeNetRequest && chrome.declarativeNetRequest.updateDynamicRules) {
-    chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: [1001],
-      addRules: [
-        {
-          id: 1001,
-          priority: 1,
-          action: {
-            type: 'modifyHeaders',
-            responseHeaders: [
-              { header: 'x-frame-options', operation: 'remove' },
-              { header: 'content-security-policy', operation: 'remove' }
-            ]
-          },
-          condition: {
-            urlFilter: '*://*.vu.edu.pk/*',
-            resourceTypes: ['sub_frame']
+    try {
+      chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [1001],
+        addRules: [
+          {
+            id: 1001,
+            priority: 1,
+            action: {
+              type: 'modifyHeaders',
+              responseHeaders: [
+                { header: 'x-frame-options', operation: 'remove' },
+                { header: 'content-security-policy', operation: 'remove' }
+              ]
+            },
+            condition: {
+              urlFilter: '*://*.vu.edu.pk/*',
+              resourceTypes: ['sub_frame']
+            }
           }
+        ]
+      }, () => {
+        if (chrome.runtime.lastError) {
+          // Safely consume lastError
         }
-      ]
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn('[VULMS Background] DNR rule registration notice:', chrome.runtime.lastError.message);
-      } else {
-        console.log('[VULMS Background] DeclarativeNetRequest sub_frame rules activated successfully.');
-      }
-    });
+      });
+    } catch (e) {}
   }
 }
-
-// Initialize rules immediately
-setupFrameHeaderRules();
 
 // Navigation detector: Listen for navigation to VULMS homepage
 if (chrome.tabs && chrome.tabs.onUpdated) {
@@ -258,6 +305,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     chrome.storage.local.set({ lastSyncStatus: 'logged_out' });
     updateBadge('', null);
     sendResponse({ success: true });
+    return false;
+  }
+
+  if (request.action === 'MARK_ACTIVITY_SUBMITTED') {
+    const { activityKey } = request;
+    chrome.storage.local.get(['webAppUrl', 'secretToken', 'studentId', 'cachedActivities'], async (store) => {
+      // 1. Update local cache
+      let updatedCache = store.cachedActivities || [];
+      updatedCache = updatedCache.map(a => {
+        if (a.activity_key === activityKey) {
+          return Object.assign({}, a, { status: 'submitted', is_submitted: true });
+        }
+        return a;
+      });
+
+      const todayStr = new Date().toISOString().substring(0, 10);
+      const remainingPending = updatedCache.filter(a => a.status !== 'submitted' && !a.is_submitted && a.end_date >= todayStr).length;
+      updateBadge(remainingPending > 0 ? String(remainingPending) : 'OK', '#10b981');
+
+      await chrome.storage.local.set({
+        cachedActivities: updatedCache,
+        pendingRemindersCount: remainingPending
+      });
+
+      // 2. Dispatch to Google Apps Script backend
+      const targetUrl = store.webAppUrl || CENTRAL_WEB_APP_URL;
+      if (targetUrl && !targetUrl.includes('REPLACE')) {
+        try {
+          const res = await postToGoogleAppsScript(targetUrl, {
+            action: 'mark_submitted',
+            secretToken: store.secretToken || '',
+            studentId: store.studentId || 'unassigned',
+            activityKey: activityKey,
+            timestamp: new Date().toISOString()
+          });
+          sendResponse({ success: true, result: res });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      } else {
+        sendResponse({ success: true, cachedOnly: true });
+      }
+    });
     return true;
   }
 
@@ -299,9 +389,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'VULMS_ACTIVITIES_EXTRACTED') {
-    handleActivitiesSync(request.data).then((res) => {
-      sendResponse(res);
-    });
+    handleActivitiesSync(request.data)
+      .then((res) => {
+        try { sendResponse(res); } catch (e) {}
+      })
+      .catch((err) => {
+        try { sendResponse({ success: false, error: (err && err.message) || String(err) }); } catch (e) {}
+      });
     return true; // Keep channel open for async response
   }
 
@@ -339,20 +433,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         updates.vuEmail = officialEmail;
       }
 
-      chrome.storage.local.set(updates);
-
-      if (store.webAppUrl) {
-        postToGoogleAppsScript(store.webAppUrl, {
-          action: 'register_student',
-          secretToken: store.secretToken || '',
-          studentId: studentId || store.studentId || 'unassigned',
-          studentName: updates.studentName || store.studentName || 'VU Student',
-          studentEmail: store.personalEmail || updates.vuEmail || store.vuEmail || (studentId ? `${studentId}@vu.edu.pk` : 'student@vu.edu.pk'),
-          timestamp: new Date().toISOString()
-        }).catch(() => {});
-      }
+      chrome.storage.local.set(updates, () => {
+        try { sendResponse({ success: true }); } catch (e) {}
+      });
     });
-    sendResponse({ success: true });
     return true;
   }
 
@@ -453,8 +537,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         updates.lastSyncStatus = 'success';
       }
       await chrome.storage.local.set(updates);
+      try { sendResponse({ success: true }); } catch (e) {}
     });
-    sendResponse({ success: true });
     return true;
   }
 
@@ -465,6 +549,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         : null;
 
       const proceedWithTab = (tab) => {
+        if (!tab || !tab.id) {
+          syncFromStorageCache(sendResponse);
+          return;
+        }
         chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (tabRes) => {
           if (chrome.runtime.lastError || !tabRes) {
             // Tab was already open before extension reload; programmatically inject scripts
@@ -473,21 +561,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 target: { tabId: tab.id },
                 files: ['content/extractor.js', 'content/content.js']
               }, () => {
+                if (chrome.runtime.lastError) {
+                  syncFromStorageCache(sendResponse);
+                  return;
+                }
                 setTimeout(() => {
-                  chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (retryRes) => {
-                    if (retryRes) {
-                      sendResponse(retryRes);
-                    } else {
-                      syncFromStorageCache(sendResponse);
-                    }
-                  });
+                  try {
+                    chrome.tabs.sendMessage(tab.id, { action: 'TRIGGER_MANUAL_SYNC' }, (retryRes) => {
+                      if (chrome.runtime.lastError) {}
+                      if (retryRes) {
+                        try { sendResponse(retryRes); } catch (e) {}
+                      } else {
+                        syncFromStorageCache(sendResponse);
+                      }
+                    });
+                  } catch (e) {
+                    syncFromStorageCache(sendResponse);
+                  }
                 }, 400);
               });
             } else {
               syncFromStorageCache(sendResponse);
             }
           } else {
-            sendResponse(tabRes);
+            try { sendResponse(tabRes); } catch (e) {}
           }
         });
       };

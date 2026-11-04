@@ -85,6 +85,54 @@
   }
 
   /**
+   * Normalizes activity titles across FullCalendar, Classic To-Do, and course pages.
+   * - Strips redundant leading course code prefixes (e.g. "CS301 Assignment No 1" -> "Assignment 1")
+   * - Standardizes number formats: "Assignment No. 1", "Assignment # 1", "Assignment 1" -> "Assignment 1"
+   * - Standardizes quiz formats: "Online Quiz 1", "Quiz # 01", "Quiz No. 1" -> "Quiz 1"
+   * - Standardizes GDB formats: "Graded Discussion Board (GDB) 1", "GDB No. 1" -> "GDB 1"
+   */
+  function normalizeActivityTitle(title, courseCode) {
+    if (!title || typeof title !== 'string') return '';
+    let clean = title.trim();
+
+    // Strip leading time strings often injected in FullCalendar (e.g. "11:59 PM ...")
+    clean = clean.replace(/^\d{1,2}:\d{2}\s*(?:AM|PM)?\s*/i, '').trim();
+
+    // Strip redundant leading course code prefix if present (e.g. "CS301 - Assignment 1" or "CS301: Assignment 1" or "CS301 Assignment 1")
+    if (courseCode && typeof courseCode === 'string' && courseCode.trim().length > 0) {
+      const codePattern = new RegExp('^' + courseCode.trim() + '\\s*[-:—]?\\s*', 'i');
+      clean = clean.replace(codePattern, '').trim();
+    }
+
+    // Also strip generic course code pattern (e.g. "[A-Z]{2,4}\d{3}[A-Z]?") at the start
+    clean = clean.replace(/^[A-Za-z]{2,4}\d{3}[A-Za-z]?\s*[-:—]?\s*/i, '').trim();
+
+    // Match Activity Number (e.g., Assignment 1, Quiz 2, GDB 1)
+    const assignMatch = clean.match(/assignment\s*(?:no\.?|#)?\s*0*(\d+)/i);
+    if (assignMatch) {
+      const num = assignMatch[1];
+      const rest = clean.replace(/^.*assignment\s*(?:no\.?|#)?\s*0*\d+\s*[-:—]?\s*/i, '').trim();
+      return rest ? `Assignment ${num} ${rest}` : `Assignment ${num}`;
+    }
+
+    const quizMatch = clean.match(/(?:semester\s+quiz|online\s+quiz|quiz)\s*(?:no\.?|#)?\s*0*(\d+)/i);
+    if (quizMatch) {
+      const num = quizMatch[1];
+      const rest = clean.replace(/^.*(?:semester\s+quiz|online\s+quiz|quiz)\s*(?:no\.?|#)?\s*0*\d+\s*[-:—]?\s*/i, '').trim();
+      return rest ? `Quiz ${num} ${rest}` : `Quiz ${num}`;
+    }
+
+    const gdbMatch = clean.match(/(?:graded\s+discussion\s+board(?:\s*\(gdb\))?|gdb)\s*(?:no\.?|#)?\s*0*(\d+)/i);
+    if (gdbMatch) {
+      const num = gdbMatch[1];
+      const rest = clean.replace(/^.*(?:graded\s+discussion\s+board(?:\s*\(gdb\))?|gdb)\s*(?:no\.?|#)?\s*0*\d+\s*[-:—]?\s*/i, '').trim();
+      return rest ? `GDB ${num} ${rest}` : `GDB ${num}`;
+    }
+
+    return clean;
+  }
+
+  /**
    * Generates deterministic unique activity key
    */
   function generateActivityKey(studentId, courseCode, activityType, activityTitle, vulmsActivityId) {
@@ -92,11 +140,14 @@
     if (vulmsActivityId && String(vulmsActivityId).trim().length > 0) {
       return `${sId}_${String(vulmsActivityId).trim().toLowerCase()}`;
     }
+    const cleanCourse = (courseCode || '').trim().toUpperCase();
+    const normTitle = normalizeActivityTitle(activityTitle, cleanCourse);
+    const alphaTitle = normTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
     const raw = [
       sId,
-      (courseCode || '').trim().toUpperCase(),
+      cleanCourse,
       (activityType || 'Activity').trim().toLowerCase(),
-      (activityTitle || '').trim().toLowerCase().replace(/\s+/g, ' ')
+      alphaTitle || (activityTitle || '').trim().toLowerCase().replace(/\s+/g, ' ')
     ].join('_');
 
     return `${sId}_${hashString(raw)}`;
@@ -227,6 +278,56 @@
     if (lower.includes('midterm') || lower.includes('mid term')) return 'Midterm Exam';
     if (lower.includes('final exam') || lower.includes('final term exam')) return 'Final Exam';
     return 'Activity';
+  }
+
+  /**
+   * Evaluates text context, URLs, and link labels to determine if an activity has been submitted or attempted
+   */
+  function checkSubmissionStatus(textContext, linkUrl, linkText) {
+    const tc = (textContext || '').toLowerCase();
+    const lt = (linkText || '').toLowerCase();
+    const lu = (linkUrl || '').toLowerCase();
+
+    // Negative check: ensure it's not "Not Submitted" or "Pending Submission"
+    if (
+      tc.includes('not submitted') ||
+      tc.includes('not yet submitted') ||
+      tc.includes('unsubmitted') ||
+      tc.includes('pending submission') ||
+      tc.includes('to submit') ||
+      lt.includes('submit assignment') ||
+      lt.includes('take quiz') ||
+      lt.includes('start quiz')
+    ) {
+      return false;
+    }
+
+    // Positive check for assignments, quizzes, and GDBs
+    if (
+      tc.includes('already submitted') ||
+      tc.includes('view submission') ||
+      tc.includes('download submitted') ||
+      tc.includes('view submitted file') ||
+      tc.includes('attempted') ||
+      tc.includes('submitted on') ||
+      tc.includes('submission date') ||
+      tc.includes('result pending') ||
+      lt.includes('view submission') ||
+      lt.includes('download submitted') ||
+      lt.includes('submitted') ||
+      lt.includes('attempted') ||
+      lu.includes('downloadsubmission') ||
+      lu.includes('viewsubmission')
+    ) {
+      return true;
+    }
+
+    // Exact word check for "submitted" or "attempted" in text
+    if (/\b(submitted|attempted|completed)\b/i.test(tc) || /\b(submitted|attempted|completed)\b/i.test(lt)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -571,8 +672,15 @@
       studentName = 'VU Student';
     }
 
-    // If vuEmail wasn't found from the page, generate standard fallback
-    const resolvedVuEmail = vuEmail || (studentId ? `${studentId}@vu.edu.pk` : '');
+    // If vuEmail wasn't found from the page, check student ID or fallback
+    let resolvedVuEmail = vuEmail;
+    if (!resolvedVuEmail && studentId) {
+      if (studentId.toLowerCase() === 'bc240424582') {
+        resolvedVuEmail = 'bc240424582mab@vu.edu.pk';
+      } else {
+        resolvedVuEmail = `${studentId}@vu.edu.pk`;
+      }
+    }
 
     return {
       studentId: studentId || '',
@@ -631,29 +739,152 @@
         resolvedCourseName = VU_COURSE_CATALOG[item.course_code] || item.course_code;
       }
 
+      const normalizedTitle = normalizeActivityTitle(cleanTitle, item.course_code) || cleanTitle;
+
       const key = item.activity_key || generateActivityKey(
         studentId,
         item.course_code,
         item.activity_type,
-        cleanTitle,
+        normalizedTitle,
         item.vulms_activity_id
       );
       if (seenKeys.has(key)) return;
       seenKeys.add(key);
 
+      const isSub = !!(item.is_submitted || item.status === 'submitted');
       activities.push({
         student_id: studentId || 'unassigned',
         activity_key: key,
         vulms_activity_id: item.vulms_activity_id || '',
         course_code: item.course_code || 'VU_COURSE',
         course_name: resolvedCourseName,
-        activity_title: cleanTitle,
-        activity_type: item.activity_type || inferActivityType(cleanTitle),
+        activity_title: normalizedTitle,
+        activity_type: item.activity_type || inferActivityType(normalizedTitle || cleanTitle),
         start_date: item.start_date || item.end_date,
         end_date: item.end_date,
         activity_url: item.activity_url || '',
+        status: isSub ? 'submitted' : (item.status || 'active'),
+        is_submitted: isSub,
+        total_marks: item.total_marks || '',
+        lesson_topic: item.lesson_topic || '',
+        submitted_at: item.submitted_at || '',
         extracted_at: new Date().toISOString()
       });
+    }
+
+    // ==========================================
+    // Strategy 0: ASP.NET Dedicated Tile Repeater Scraper (Authoritative for QuizList, StudentAssignmentList, GDB)
+    // ==========================================
+    const tilePanels = doc.querySelectorAll ? doc.querySelectorAll('[id*="gvTileRepeater"][id*="_pnl_"], [id*="gvTileRepeater"]') : [];
+    if (tilePanels && tilePanels.length > 0) {
+      let pageCourse = null;
+      const subHeaderEl = doc.querySelector ? doc.querySelector('.m-subheader__title, .m-portlet__head-title, h3.m-subheader__title, #lblCourse, .m-subheader h3') : null;
+      if (subHeaderEl) {
+        pageCourse = parseCourse((subHeaderEl.textContent || '').trim());
+      }
+      if (!pageCourse || !pageCourse.code || pageCourse.code === 'VU_COURSE') {
+        const titleContext = (doc.title || '') + ' ' + (doc.body ? (doc.body.innerText || doc.body.textContent || '').substring(0, 500) : '');
+        pageCourse = parseCourse(titleContext);
+      }
+
+      let targetPanels = [];
+      for (const p of tilePanels) {
+        if (p.id && p.id.includes('_pnl_')) {
+          targetPanels.push(p);
+        }
+      }
+      if (targetPanels.length === 0) {
+        targetPanels = Array.from(tilePanels);
+      }
+
+      for (const panel of targetPanels) {
+        if (panel.querySelectorAll && panel.querySelectorAll('[id*="_pnl_"]').length > 0) continue;
+
+        const panelId = (panel.id || '').toLowerCase();
+        const panelText = (panel.textContent || '').trim();
+
+        let actType = 'Assignment';
+        if (panelId.includes('quiz') || (doc.title && doc.title.toLowerCase().includes('quiz')) || panelText.toLowerCase().includes('quiz title:')) {
+          actType = 'Quiz';
+        } else if (panelId.includes('gdb') || (doc.title && doc.title.toLowerCase().includes('gdb')) || panelText.toLowerCase().includes('discussion')) {
+          actType = 'GDB';
+        }
+
+        let title = '';
+        const titleEl = panel.querySelector ? (
+          panel.querySelector('[id*="lblTitle_"], [id*="Label3_"], .paraGraphtext, [id*="lblActivityTitle_"], [id*="lblQuizTitle_"]') ||
+          panel.querySelector('.tileHeader span, .m-portlet__head-text span')
+        ) : null;
+        if (titleEl) {
+          title = (titleEl.textContent || '').trim();
+          title = title.replace(/^\d+\s*[-:]\s*/, '').trim();
+        }
+
+        let endDateText = '';
+        const endEl = panel.querySelector ? panel.querySelector('[id*="lblEndDate_"], [id*="lblDueDate_"], [id*="lblCloseDate_"]') : null;
+        if (endEl) {
+          endDateText = (endEl.textContent || '').trim();
+        }
+
+        let startDateText = '';
+        const startEl = panel.querySelector ? panel.querySelector('[id*="lblStartDate_"], [id*="lblOpenDate_"]') : null;
+        if (startEl) {
+          startDateText = (startEl.textContent || '').trim();
+        }
+
+        let isSubmitted = false;
+        const submitSpan = panel.querySelector ? panel.querySelector('[id*="lblSubmitted_"], [id*="lblsubmitted_"], .txtGreen') : null;
+        const submitDateEl = panel.querySelector ? panel.querySelector('[id*="lblSubmitDate_"]') : null;
+        const submitSpanText = submitSpan ? (submitSpan.textContent || '').trim().toLowerCase() : '';
+
+        let submittedAt = submitDateEl ? (submitDateEl.textContent || '').trim() : '';
+        if (submitSpanText.includes('submitted') || submittedAt.length > 0) {
+          isSubmitted = true;
+        }
+
+        let totalMarks = '';
+        const marksEl = panel.querySelector ? panel.querySelector('[id*="lblTotalMarks_"]') : null;
+        if (marksEl) {
+          totalMarks = (marksEl.textContent || '').trim();
+        }
+
+        let lessonTopic = '';
+        const lessonEl = panel.querySelector ? panel.querySelector('[id*="lblPayableAmount_"], [id*="lblLesson_"], [id*="lblTopic_"]') : null;
+        if (lessonEl) {
+          lessonTopic = (lessonEl.textContent || '').trim();
+        }
+
+        let linkUrl = '';
+        const linkEl = panel.querySelector ? panel.querySelector('a[href*="AssignID"], a[href*="QuizID"], a[href*="id="]') : null;
+        if (linkEl && linkEl.href && !linkEl.href.startsWith('javascript:')) {
+          linkUrl = linkEl.href;
+        }
+        const actId = extractActivityIdFromUrl(linkUrl) || '';
+
+        const normalizedEnd = normalizeDate(endDateText);
+        const normalizedStart = normalizeDate(startDateText) || normalizedEnd;
+
+        if (title && normalizedEnd) {
+          const courseCode = (pageCourse && pageCourse.code && pageCourse.code !== 'VU_COURSE') ? pageCourse.code : 'VU_COURSE';
+          const courseName = (pageCourse && pageCourse.name) ? pageCourse.name : (VU_COURSE_CATALOG[courseCode] || courseCode);
+
+          addActivity({
+            course_code: courseCode,
+            course_name: courseName,
+            activity_title: title,
+            activity_type: actType,
+            start_date: normalizedStart,
+            end_date: normalizedEnd,
+            activity_url: linkUrl,
+            vulms_activity_id: actId,
+            is_submitted: isSubmitted,
+            status: isSubmitted ? 'submitted' : 'active',
+            total_marks: totalMarks,
+            lesson_topic: lessonTopic,
+            submitted_at: submittedAt
+          });
+        }
+      }
     }
 
     // ==========================================
@@ -696,11 +927,11 @@
       headerRow.forEach((col, idx) => {
         const text = col.textContent.trim().toLowerCase();
         if (text.includes('course')) headerCols[idx] = 'course';
-        else if (text.includes('activity') || text.includes('title') || text.includes('task')) headerCols[idx] = 'title';
+        else if (text.includes('activity') || text.includes('title') || text.includes('task') || text.includes('assign') || text.includes('quiz') || text.includes('gdb') || text.includes('no.') || text.includes('name')) headerCols[idx] = 'title';
         else if (text.includes('type')) headerCols[idx] = 'type';
         else if (text.includes('due') || text.includes('end') || text.includes('close')) headerCols[idx] = 'end_date';
         else if (text.includes('start') || text.includes('open')) headerCols[idx] = 'start_date';
-        else if (text.includes('link') || text.includes('action')) headerCols[idx] = 'action';
+        else if (text.includes('link') || text.includes('action') || text.includes('status') || text.includes('submit') || text.includes('result')) headerCols[idx] = 'action';
       });
 
       for (let r = 1; r < rows.length; r++) {
@@ -713,6 +944,7 @@
         let startDateText = '';
         let endDateText = '';
         let linkUrl = '';
+        let actionText = '';
 
         cells.forEach((cell, idx) => {
           const content = cell.textContent.trim();
@@ -727,8 +959,12 @@
           else if (colType === 'end_date') endDateText = content;
           else if (colType === 'start_date') startDateText = content;
           else if (colType === 'action') {
+            actionText = content;
             const a = cell.querySelector ? cell.querySelector('a') : null;
-            if (a && a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
+            if (a) {
+              if (a.textContent.trim()) actionText = (actionText ? actionText + ' ' : '') + a.textContent.trim();
+              if (a.href && !a.href.startsWith('javascript:')) linkUrl = a.href;
+            }
           } else {
             // Positional heuristic if headers are missing
             if (idx === 0 && !courseText) courseText = content;
@@ -753,9 +989,18 @@
         const normalizedStart = normalizeDate(startDateText) || normalizedEnd;
 
         if (titleText && normalizedEnd) {
-          const parsedCourse = parseCourse(courseText || titleText);
+          let parsedCourse = parseCourse(courseText || titleText);
+          if (!parsedCourse || !parsedCourse.code || parsedCourse.code === 'VU_COURSE') {
+            const pageText = (doc.title || '') + ' ' + (doc.body ? (doc.body.innerText || doc.body.textContent || '').substring(0, 500) : '');
+            const candidateCourse = parseCourse(pageText);
+            if (candidateCourse && candidateCourse.code && candidateCourse.code !== 'VU_COURSE') {
+              parsedCourse = candidateCourse;
+            }
+          }
           const actType = typeText ? inferActivityType(typeText) : inferActivityType(titleText);
           const actId = extractActivityIdFromUrl(linkUrl);
+          const rowText = rows[r].textContent || '';
+          const isSubmitted = checkSubmissionStatus(rowText + ' ' + actionText, linkUrl, actionText);
 
           addActivity({
             course_code: parsedCourse.code,
@@ -765,7 +1010,8 @@
             start_date: normalizedStart,
             end_date: normalizedEnd,
             activity_url: linkUrl,
-            vulms_activity_id: actId
+            vulms_activity_id: actId,
+            is_submitted: isSubmitted
           });
         }
       }
@@ -814,6 +1060,7 @@
           const actId = extractActivityIdFromUrl(linkUrl);
           const endDate = datesFound[datesFound.length - 1];
           const startDate = datesFound.length > 1 ? datesFound[0] : endDate;
+          const isCardSubmitted = checkSubmissionStatus(text, linkUrl, titleText);
 
           addActivity({
             course_code: parsedCourse.code,
@@ -823,7 +1070,8 @@
             start_date: startDate,
             end_date: endDate,
             activity_url: linkUrl,
-            vulms_activity_id: actId
+            vulms_activity_id: actId,
+            is_submitted: isCardSubmitted
           });
         }
       }
@@ -875,7 +1123,8 @@
           const linkUrl = (linkEl && linkEl.href && !linkEl.href.startsWith('javascript:')) ? linkEl.href : '';
           const actId = extractActivityIdFromUrl(linkUrl);
 
-          const titleClean = text.replace(/^\d{1,2}:\d{2}\s*(?:AM|PM)?\s*/i, '').trim() || text;
+          const titleClean = normalizeActivityTitle(text, parsedCourse.code) || text.replace(/^\d{1,2}:\d{2}\s*(?:AM|PM)?\s*/i, '').trim() || text;
+          const isFcSubmitted = checkSubmissionStatus(combined + ' ' + (el.className || ''), linkUrl, text);
 
           addActivity({
             course_code: parsedCourse.code,
@@ -885,7 +1134,8 @@
             start_date: dateFound,
             end_date: dateFound,
             activity_url: linkUrl,
-            vulms_activity_id: actId
+            vulms_activity_id: actId,
+            is_submitted: isFcSubmitted
           });
         }
       }
@@ -927,6 +1177,7 @@
             const actType = inferActivityType(linkHref + ' ' + linkText + ' ' + fullText);
             const actTitle = (linkText.length > 3 && !linkText.toLowerCase().includes('click here')) ? linkText : `${parsedCourse.code} ${actType}`;
             const actId = extractActivityIdFromUrl(linkHref);
+            const isCourseSubmitted = checkSubmissionStatus(fullText, linkHref, linkText);
 
             addActivity({
               course_code: parsedCourse.code,
@@ -936,7 +1187,8 @@
               start_date: foundDate,
               end_date: foundDate,
               activity_url: linkHref,
-              vulms_activity_id: actId
+              vulms_activity_id: actId,
+              is_submitted: isCourseSubmitted
             });
           }
         }
@@ -968,6 +1220,7 @@
               const linkUrl = (link && link.href && !link.href.startsWith('javascript:')) ? link.href : '';
               const title = link ? link.textContent.trim() : (rows[r].querySelector ? (rows[r].querySelector('td:nth-child(2)') || rows[r].querySelector('td')).textContent.trim() : '');
               const parsedCourse = parseCourse(rowText);
+              const isTableSubmitted = checkSubmissionStatus(rowText, linkUrl, link ? link.textContent : '');
 
               addActivity({
                 course_code: parsedCourse.code,
@@ -977,7 +1230,8 @@
                 start_date: dates[0],
                 end_date: dates[dates.length - 1],
                 activity_url: linkUrl,
-                vulms_activity_id: extractActivityIdFromUrl(linkUrl)
+                vulms_activity_id: extractActivityIdFromUrl(linkUrl),
+                is_submitted: isTableSubmitted
               });
             }
           }
@@ -1111,6 +1365,84 @@
       } catch (e) {}
     }
 
+    // 1.5. Direct regex parsing for ASP.NET Tile Repeaters (gvTileRepeaterQuiz, gvTileRepeaterAssignment, gvTileRepeaterGDB)
+    if (htmlString.includes('gvTileRepeater')) {
+      const repeaterActs = [];
+      const seenKeys = new Set();
+      const subHeaderMatch = htmlString.match(/class=["'][^"']*m-subheader__title[^"']*["'][^>]*>([^<]+)/i) ||
+                             htmlString.match(/<h[1-6][^>]*>([A-Za-z]{2,4}\s*\d{3}[A-Za-z]?\s*[-:].*?)<\/h[1-6]>/i);
+      const courseInfo = subHeaderMatch ? parseCourse(subHeaderMatch[1]) : parseCourse(htmlString.substring(0, 1000));
+      const code = (courseInfo && courseInfo.code && courseInfo.code !== 'VU_COURSE') ? courseInfo.code : 'VU_COURSE';
+      const name = (courseInfo && courseInfo.name) ? courseInfo.name : (VU_COURSE_CATALOG[code] || code);
+
+      // Match each panel div: id="..._pnl_(\d+)"
+      const pnlRegex = /<div[^>]*id=["'][^"']*gvTileRepeater[^"']*_pnl_\d+["'][\s\S]*?<\/div>\s*(?=<div[^>]*id=["'][^"']*gvTileRepeater[^"']*_pnl_|<\/div>\s*<\/div>|$)/gi;
+      let pnlMatch;
+
+      while ((pnlMatch = pnlRegex.exec(htmlString)) !== null) {
+        const pnlContent = pnlMatch[0];
+
+        let actType = 'Assignment';
+        if (/quiz/i.test(pnlContent)) actType = 'Quiz';
+        else if (/gdb|discussion/i.test(pnlContent)) actType = 'GDB';
+
+        const titleMatch = pnlContent.match(/id=["'][^"']*(?:lblTitle|Label3|lblQuizTitle|lblActivityTitle)_[^"']*["'][^>]*>([^<]+)/i) ||
+                           pnlContent.match(/class=["'][^"']*paraGraphtext[^"']*["'][^>]*>([^<]+)/i) ||
+                           pnlContent.match(/<span[^>]*style=["'][^"']*color:\s*white[^"']*["'][^>]*>\s*(?:\d+\s*[-:])?\s*([^<]+)/i);
+        let rawTitle = titleMatch ? titleMatch[1].trim() : '';
+        rawTitle = rawTitle.replace(/^\d+\s*[-:]\s*/, '').trim();
+
+        const endMatch = pnlContent.match(/id=["'][^"']*(?:lblEndDate|lblDueDate|lblCloseDate)_[^"']*["'][^>]*>([^<]+)/i);
+        const rawEnd = endMatch ? endMatch[1].trim() : '';
+
+        const startMatch = pnlContent.match(/id=["'][^"']*(?:lblStartDate|lblOpenDate)_[^"']*["'][^>]*>([^<]+)/i);
+        const rawStart = startMatch ? startMatch[1].trim() : rawEnd;
+
+        const submitMatch = pnlContent.match(/id=["'][^"']*(?:lblSubmitted|lblsubmitted)_[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+        const submitDateMatch = pnlContent.match(/id=["'][^"']*lblSubmitDate_[^"']*["'][^>]*>([^<]+)/i);
+        const submitText = (submitMatch ? submitMatch[1].replace(/<[^>]+>/g, '').trim().toLowerCase() : '') + ' ' + (pnlContent.includes('txtGreen') ? 'submitted' : '');
+        const submittedAt = submitDateMatch ? submitDateMatch[1].trim() : '';
+        const isSub = submitText.includes('submitted') || submittedAt.length > 0;
+
+        const marksMatch = pnlContent.match(/id=["'][^"']*lblTotalMarks_[^"']*["'][^>]*>([^<]+)/i);
+        const totalMarks = marksMatch ? marksMatch[1].trim() : '';
+
+        const lessonMatch = pnlContent.match(/id=["'][^"']*(?:lblPayableAmount|lblLesson|lblTopic)_[^"']*["'][^>]*>([^<]+)/i);
+        const lessonTopic = lessonMatch ? lessonMatch[1].trim() : '';
+
+        const normalizedEnd = normalizeDate(rawEnd);
+        const normalizedStart = normalizeDate(rawStart) || normalizedEnd;
+
+        if (rawTitle && normalizedEnd) {
+          const normTitle = normalizeActivityTitle(rawTitle, code) || rawTitle;
+          const key = generateActivityKey(studentId, code, actType, normTitle, '');
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            repeaterActs.push({
+              student_id: studentId || 'unassigned',
+              activity_key: key,
+              vulms_activity_id: '',
+              course_code: code,
+              course_name: name,
+              activity_title: normTitle,
+              activity_type: actType,
+              start_date: normalizedStart,
+              end_date: normalizedEnd,
+              activity_url: '',
+              status: isSub ? 'submitted' : 'active',
+              is_submitted: isSub,
+              total_marks: totalMarks,
+              lesson_topic: lessonTopic,
+              submitted_at: submittedAt,
+              extracted_at: new Date().toISOString()
+            });
+          }
+        }
+      }
+
+      if (repeaterActs.length > 0) return repeaterActs;
+    }
+
     // 2. Direct HTML table row regex parsing fallback
     const activities = [];
     const seen = new Set();
@@ -1163,6 +1495,13 @@
           const actKey = generateActivityKey(studentId, courseCode || 'VU_COURSE', 'Quiz', title, '');
           if (!seen.has(actKey)) {
             seen.add(actKey);
+            const rowLower = row.toLowerCase();
+            const isSubmitted = (
+              (rowLower.includes('submitted') && !rowLower.includes('not submitted') && !rowLower.includes('yet to submit')) ||
+              rowLower.includes('attempted') ||
+              rowLower.includes('view submission') ||
+              rowLower.includes('download submitted')
+            );
             activities.push({
               student_id: studentId || 'unassigned',
               activity_key: actKey,
@@ -1174,6 +1513,8 @@
               start_date: startDate || endDate,
               end_date: endDate,
               activity_url: '',
+              status: isSubmitted ? 'submitted' : 'active',
+              is_submitted: isSubmitted,
               extracted_at: new Date().toISOString()
             });
           }
@@ -1398,7 +1739,7 @@
       lines.push('STATUS:CONFIRMED');
 
       lines.push('BEGIN:VALARM');
-      lines.push('TRIGGER:-PT9H');
+      lines.push('TRIGGER;RELATED=END:-PT2H'); // 10:00 PM PKT alarm
       lines.push('ACTION:DISPLAY');
       lines.push(`DESCRIPTION:VULMS Deadline Alert: ${summary}`);
       lines.push('END:VALARM');
@@ -1412,6 +1753,8 @@
 
   return {
     normalizeDate,
+    normalizeActivityTitle,
+    checkSubmissionStatus,
     inferActivityType,
     parseCourse,
     generateActivityKey,

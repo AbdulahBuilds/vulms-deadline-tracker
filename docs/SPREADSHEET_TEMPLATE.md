@@ -20,9 +20,9 @@ This document details the exact schema, constraints, and optional conditional fo
 | 8 | **H** | `start_date` | Date (`YYYY-MM-DD`) | Opening date |
 | 9 | **I** | `end_date` | Date (`YYYY-MM-DD`) | Deadline date |
 | 10 | **J** | `activity_url` | String | Direct VULMS portal submission link |
-| 11 | **K** | `status` | String | `active` \| `overdue` \| `cancelled` |
+| 11 | **K** | `status` | String | `active` \| `submitted` \| `overdue` \| `cancelled` |
 | 12 | **L** | `reminder_datetime` | DateTime | Target timestamp (`YYYY-MM-DD 12:00:00`) |
-| 13 | **M** | `reminder_status` | String | `pending` \| `sent` \| `pending_extended` \| `skipped_past_deadline` |
+| 13 | **M** | `reminder_status` | String | `pending` \| `sent` \| `completed` \| `pending_extended` \| `skipped_past_deadline` |
 | 14 | **N** | `reminder_sent_at` | DateTime | Timestamp when email was successfully sent |
 | 15 | **O** | `created_at` | DateTime | Initial record insertion time |
 | 16 | **P** | `updated_at` | DateTime | Last modification time (e.g. deadline shift) |
@@ -61,6 +61,11 @@ To make your Google Sheet visually dynamic and easy to monitor:
 - **Format cells if**: Custom formula is
 - **Formula**: `=$K2="overdue"`
 - **Formatting Style**: Fill `#f1f5f9` (Soft Slate), Text `#94a3b8`
+
+### Rule 5: Submitted / Completed Tasks (Success Mint Green)
+- **Format cells if**: Custom formula is
+- **Formula**: `=$K2="submitted"`
+- **Formatting Style**: Fill `#d1fae5` (Soft Mint), Text `#065f46` (Forest Green)
 
 ---
 
